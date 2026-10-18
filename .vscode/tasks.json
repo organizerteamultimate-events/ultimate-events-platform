@@ -1,0 +1,12 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run ULTIMATE EVENTS",
+			"type": "shell",
+			"command": "corepack pnpm exec next dev --port 3100",
+			"isBackground": true,
+			"problemMatcher": []
+		}
+	]
+}
