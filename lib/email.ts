@@ -9,6 +9,16 @@ export function isTransactionalEmailConfigured() {
   )
 }
 
+export function wasRecipientAcceptedBySmtp(
+  to: string,
+  acceptedRecipients: readonly (string | { address: string })[],
+) {
+  return acceptedRecipients.some((recipient) => {
+    const address = typeof recipient === 'string' ? recipient : recipient.address
+    return address.toLowerCase() === to.toLowerCase()
+  })
+}
+
 export function escapeEmailHtml(value: string) {
   return value.replace(/[&<>"']/g, (character) => {
     const escaped: Record<string, string> = {
@@ -50,5 +60,10 @@ export async function sendTransactionalEmail({
     auth: { user: SMTP_USER, pass: SMTP_APP_PASSWORD },
   })
 
-  await transporter.sendMail({ from: EMAIL_FROM, to, subject, text, html })
+  const result = await transporter.sendMail({ from: EMAIL_FROM, to, subject, text, html })
+  if (!wasRecipientAcceptedBySmtp(to, result.accepted)) {
+    throw new Error('SMTP server did not accept the recipient.')
+  }
+
+  return { status: 'accepted' as const }
 }

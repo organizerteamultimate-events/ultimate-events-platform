@@ -16,12 +16,8 @@ export const metadata: Metadata = {
     'ULTIMATE EVENTS is an event management and skill development platform for workshops, coding competitions, leaderboards, and verified certificates.',
   generator: 'v0.app',
   icons: {
-    icon: [
-      { url: '/icon-light-32x32.png', media: '(prefers-color-scheme: light)' },
-      { url: '/icon-dark-32x32.png', media: '(prefers-color-scheme: dark)' },
-      { url: '/icon.svg', type: 'image/svg+xml' },
-    ],
-    apple: '/apple-icon.png',
+    icon: [{ url: '/images/ultimate-events-logo.png', type: 'image/png' }],
+    apple: '/images/ultimate-events-logo.png',
   },
 }
 

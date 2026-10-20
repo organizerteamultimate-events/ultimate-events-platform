@@ -46,12 +46,31 @@ export async function proxy(request: NextRequest) {
 
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('role')
+      .select('role, account_status')
       .eq('id', data.user.id)
       .maybeSingle()
 
-    if (profileError || profile?.role !== 'admin') {
+    if (profileError || profile?.account_status !== 'active') {
+      return NextResponse.redirect(new URL('/login?error=account-unavailable', request.url))
+    }
+
+    if (profile.role !== 'admin') {
       return NextResponse.redirect(new URL('/admin/login?error=unauthorized', request.url))
+    }
+  }
+
+  if (path.startsWith('/dashboard')) {
+    if (error || !data.user) {
+      return NextResponse.redirect(new URL('/login', request.url))
+    }
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('account_status')
+      .eq('id', data.user.id)
+      .maybeSingle()
+
+    if (profileError || profile?.account_status !== 'active') {
+      return NextResponse.redirect(new URL('/login?error=account-unavailable', request.url))
     }
   }
 

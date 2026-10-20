@@ -29,7 +29,12 @@ const activity = [
 export default async function DashboardPage() {
   let profile: { full_name: string; participant_id: string } | null = null
   let profileError: string | null = null
-  let metrics = { registrations: null as number | null, upcoming: null as number | null, payments: null as number | null }
+  let metrics = {
+    registrations: null as number | null,
+    upcoming: null as number | null,
+    payments: null as number | null,
+    certificates: null as number | null,
+  }
   let metricsError: string | null = null
 
   if (isSupabaseConfigured()) {
@@ -47,18 +52,20 @@ export default async function DashboardPage() {
         if (error) profileError = `Could not load your participant profile: ${error.message}`
         else profile = data
 
-        const [registrations, upcoming, payments] = await Promise.all([
+        const [registrations, upcoming, payments, certificates] = await Promise.all([
           supabase.from('registrations').select('id', { count: 'exact', head: true }).eq('user_id', authData.user.id),
           supabase.from('events').select('id', { count: 'exact', head: true }).eq('status', 'published').gte('event_date', new Date().toISOString()),
           supabase.from('payments').select('id', { count: 'exact', head: true }).eq('user_id', authData.user.id).eq('status', 'pending'),
+          supabase.from('certificates').select('id', { count: 'exact', head: true }).eq('user_id', authData.user.id).is('revoked_at', null),
         ])
-        if (registrations.error || upcoming.error || payments.error) {
-          metricsError = 'Event activity is unavailable. Apply the events migration and check its RLS policies.'
+        if (registrations.error || upcoming.error || payments.error || certificates.error) {
+          metricsError = 'Account activity is unavailable. Apply the participant workflows migration and check its RLS policies.'
         } else {
           metrics = {
             registrations: registrations.count ?? 0,
             upcoming: upcoming.count ?? 0,
             payments: payments.count ?? 0,
+            certificates: certificates.count ?? 0,
           }
         }
       }
@@ -106,7 +113,7 @@ export default async function DashboardPage() {
         <PanelStat label="My registrations" icon="clipboard" value={metrics.registrations?.toLocaleString() ?? '—'} detail="Stored event registrations" />
         <PanelStat label="Upcoming events" icon="calendar" value={metrics.upcoming?.toLocaleString() ?? '—'} detail="Published and scheduled" />
         <PanelStat label="Payments under review" icon="credit" value={metrics.payments?.toLocaleString() ?? '—'} detail="Manual UPI submissions awaiting review" />
-        <PanelStat label="Certificates" icon="award" detail="Certificate records are not connected yet" />
+        <PanelStat label="Certificates" icon="award" value={metrics.certificates?.toLocaleString() ?? '—'} detail="Issued, active certificates" />
       </section>
 
       <div className="mt-9 grid gap-8 xl:grid-cols-[1.35fr_0.85fr]">

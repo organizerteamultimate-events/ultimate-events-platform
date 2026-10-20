@@ -109,22 +109,52 @@ export function ContactForm() {
   )
 }
 
-export function CertificateVerifyForm() {
-  const [id, setId] = useState('')
+export function CertificateVerifyForm({ initialCertificateNumber = '' }: { initialCertificateNumber?: string }) {
+  const [id, setId] = useState(initialCertificateNumber)
   const [error, setError] = useState<string>()
   const [result, setResult] = useState<string | null>(null)
+  const [verified, setVerified] = useState<{
+    participant_name: string
+    participant_id: string
+    event_name: string
+    certificate_number: string
+    issued_at: string
+  } | null>(null)
 
-  function onSubmit(event: React.FormEvent<HTMLFormElement>) {
+  async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!/^[A-Z0-9-]{6,40}$/i.test(id.trim())) {
       setError('Enter a valid certificate ID, e.g. UE-CERT-2026-000001.')
       setResult(null)
+      setVerified(null)
       return
     }
     setError(undefined)
-    setResult(
-      `Certificate "${id.trim().toUpperCase()}" cannot be verified yet: the certificate database is not connected. This is not a confirmation of authenticity.`,
-    )
+    setResult(null)
+    setVerified(null)
+    const supabase = createSupabaseBrowserClient()
+    if (!supabase) {
+      setResult('Certificate verification is unavailable because Supabase is not configured.')
+      return
+    }
+    try {
+      const { data, error: verificationError } = await supabase.rpc('verify_certificate', {
+        p_certificate_number: id.trim().toUpperCase(),
+      })
+      if (verificationError) {
+        setResult(`Certificate could not be verified: ${verificationError.message}`)
+        return
+      }
+      const certificate = data?.[0]
+      if (!certificate) {
+        setResult(`No active certificate was found for "${id.trim().toUpperCase()}".`)
+        return
+      }
+      setVerified(certificate)
+      setResult('This is an active certificate issued by ULTIMATE EVENTS.')
+    } catch (verificationError) {
+      setResult(`Certificate could not be verified: ${verificationError instanceof Error ? verificationError.message : 'Unexpected connection error.'}`)
+    }
   }
 
   return (
@@ -141,6 +171,15 @@ export function CertificateVerifyForm() {
         />
       </Field>
       <FormResult message={result} />
+      {verified && (
+        <dl className="grid gap-2 rounded-xl border bg-accent/40 p-4 text-sm">
+          <div><dt className="inline font-semibold">Participant: </dt><dd className="inline">{verified.participant_name}</dd></div>
+          <div><dt className="inline font-semibold">Participant ID: </dt><dd className="inline font-mono">{verified.participant_id}</dd></div>
+          <div><dt className="inline font-semibold">Event: </dt><dd className="inline">{verified.event_name}</dd></div>
+          <div><dt className="inline font-semibold">Certificate number: </dt><dd className="inline font-mono">{verified.certificate_number}</dd></div>
+          <div><dt className="inline font-semibold">Issued: </dt><dd className="inline">{new Intl.DateTimeFormat('en-IN', { dateStyle: 'long' }).format(new Date(verified.issued_at))}</dd></div>
+        </dl>
+      )}
       <SubmitButton>Verify certificate</SubmitButton>
     </form>
   )

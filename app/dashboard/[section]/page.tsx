@@ -15,6 +15,8 @@ import { EmptyState } from '@/components/site/blocks'
 import { PanelAccessNotice, PanelPageHeading } from '@/components/dashboard/panel-shell'
 import { ProfileEditor } from '@/components/dashboard/profile-editor'
 import { createSupabaseServerClient } from '@/lib/supabase/server'
+import { ParticipantSubmissionManager, type ParticipantCompetitionRecord } from '@/components/dashboard/participant-submission-manager'
+import { ParticipantNotifications, type ParticipantNotification } from '@/components/dashboard/participant-notifications'
 
 const sections = {
   profile: {
@@ -120,7 +122,137 @@ export default async function DashboardSectionPage({
   const details = sections[section as SectionKey]
   const Icon = details.icon
 
-  if (section === 'profile' || section === 'registrations' || section === 'events' || section === 'workshops' || section === 'payments') {
+  if (section === 'results') {
+    const supabase = await createSupabaseServerClient()
+    const { data: authData, error: authError } = supabase
+      ? await supabase.auth.getUser()
+      : { data: { user: null }, error: new Error('Supabase is not configured.') }
+    if (!supabase || authError || !authData.user) {
+      return (
+        <>
+          <PanelPageHeading eyebrow={details.eyebrow} title={details.title} description={details.description} />
+          <PanelAccessNotice />
+          <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">Your competition records could not be loaded. Sign in again or verify the Supabase configuration.</p>
+        </>
+      )
+    }
+
+    const [{ data: registrations, error: registrationError }, { data: submissions, error: submissionError }] = await Promise.all([
+      supabase.from('registrations').select('id, event_id').eq('user_id', authData.user.id).eq('status', 'confirmed'),
+      supabase.from('submissions')
+        .select('id, registration_id, event_id, submission_url, notes, status, score, feedback, submitted_at')
+        .eq('user_id', authData.user.id)
+        .order('submitted_at', { ascending: false }),
+    ])
+    const eventIds = [...new Set((registrations ?? []).map((registration) => registration.event_id))]
+    const [{ data: events, error: eventsError }] = eventIds.length
+      ? await Promise.all([
+          supabase.from('events').select('id, title, category').in('id', eventIds),
+        ])
+      : [{ data: [], error: null }]
+    const submissionByRegistration = new Map((submissions ?? []).map((submission) => [submission.registration_id, submission]))
+    const eventById = new Map((events ?? []).map((event) => [event.id, event]))
+    const competitions: ParticipantCompetitionRecord[] = (registrations ?? [])
+      .flatMap((registration) => {
+        const event = eventById.get(registration.event_id)
+        if (!event?.category.toLowerCase().includes('competition')) return []
+        const submission = submissionByRegistration.get(registration.id)
+        return [{
+          registration_id: registration.id,
+          event_id: event.id,
+          event_title: event.title,
+          submission: submission ? {
+            id: submission.id,
+            submission_url: submission.submission_url,
+            notes: submission.notes,
+            status: submission.status,
+            score: submission.score,
+            feedback: submission.feedback,
+            submitted_at: submission.submitted_at,
+          } : null,
+        }]
+      })
+
+    return (
+      <>
+        <PanelPageHeading eyebrow={details.eyebrow} title={details.title} description={details.description} />
+        <PanelAccessNotice />
+        <ParticipantSubmissionManager
+          competitions={competitions}
+          userId={authData.user.id}
+          loadError={registrationError || submissionError || eventsError ? 'Competition submissions could not be loaded. Apply the participant workflows migration and verify event access policies.' : null}
+        />
+      </>
+    )
+  }
+
+  if (section === 'certificates') {
+    const supabase = await createSupabaseServerClient()
+    const { data: authData, error: authError } = supabase
+      ? await supabase.auth.getUser()
+      : { data: { user: null }, error: new Error('Supabase is not configured.') }
+    const { data: certificates, error } = supabase && authData.user
+      ? await supabase.from('certificates')
+          .select('id, certificate_number, participant_id, event_name, issued_at, revoked_at')
+          .eq('user_id', authData.user.id)
+          .order('issued_at', { ascending: false })
+      : { data: null, error: authError ?? new Error('Authentication required.') }
+    return (
+      <>
+        <PanelPageHeading eyebrow={details.eyebrow} title={details.title} description={details.description} />
+        <PanelAccessNotice />
+        {error ? (
+          <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">Certificates could not be loaded. Apply the participant workflows migration and verify your account.</p>
+        ) : certificates?.length ? (
+          <ul className="grid gap-3">
+            {certificates.map((certificate) => (
+              <li key={certificate.id} className="flex flex-col justify-between gap-4 rounded-xl border bg-card p-5 sm:flex-row sm:items-center">
+                <div>
+                  <h2 className="font-semibold">{certificate.event_name}</h2>
+                  <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{certificate.certificate_number} · {certificate.participant_id}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">{certificate.revoked_at ? 'Revoked' : 'Active'} · {new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium' }).format(new Date(certificate.issued_at))}</p>
+                </div>
+                {!certificate.revoked_at && (
+                  <div className="flex flex-wrap gap-2">
+                    <a href={`/api/certificates/${certificate.id}`} className="inline-flex h-10 items-center justify-center rounded-lg bg-gold px-4 text-sm font-semibold text-gold-foreground">Download PDF</a>
+                    <a href={`/verify-certificate?certificate=${encodeURIComponent(certificate.certificate_number)}`} className="inline-flex h-10 items-center justify-center rounded-lg border px-4 text-sm font-semibold">Verify</a>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <EmptyState icon={Icon} title={details.emptyTitle} description={details.emptyDescription} />
+        )}
+      </>
+    )
+  }
+
+  if (section === 'notifications') {
+    const supabase = await createSupabaseServerClient()
+    const { data: authData, error: authError } = supabase
+      ? await supabase.auth.getUser()
+      : { data: { user: null }, error: new Error('Supabase is not configured.') }
+    const { data: notifications, error } = supabase && authData.user
+      ? await supabase.from('notifications')
+          .select('id, kind, title, message, created_at, read_at')
+          .eq('user_id', authData.user.id)
+          .order('created_at', { ascending: false })
+          .limit(200)
+      : { data: null, error: authError ?? new Error('Authentication required.') }
+    return (
+      <>
+        <PanelPageHeading eyebrow={details.eyebrow} title={details.title} description={details.description} />
+        <PanelAccessNotice />
+        <ParticipantNotifications
+          notifications={(notifications ?? []) as ParticipantNotification[]}
+          loadError={error ? 'Notifications could not be loaded. Apply the participant workflows migration and verify your account.' : null}
+        />
+      </>
+    )
+  }
+
+  if (section === 'profile' || section === 'registrations' || section === 'events' || section === 'workshops' || section === 'payments' || section === 'competitions') {
     const supabase = await createSupabaseServerClient()
     const { data: authData, error: authError } = supabase
       ? await supabase.auth.getUser()
@@ -169,7 +301,7 @@ export default async function DashboardSectionPage({
     if (section === 'payments') {
       const { data: payments, error } = await supabase
         .from('payments')
-        .select('id, registration_id, amount, utr, status, created_at')
+        .select('id, registration_id, amount, utr, status, rejection_reason, created_at')
         .eq('user_id', authData.user.id)
         .order('created_at', { ascending: false })
       const registrationIds = [...new Set(
@@ -208,6 +340,11 @@ export default async function DashboardSectionPage({
                         {payment.status ?? 'Legacy record — not linked to a registration'}
                       </span>
                     </div>
+                    {payment.rejection_reason && (
+                      <p className="mt-2 whitespace-pre-wrap text-sm text-destructive">
+                        Rejection reason: {payment.rejection_reason}
+                      </p>
+                    )}
                     <p className="mt-3 text-sm">₹{Number(payment.amount).toFixed(2)} · {new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium' }).format(new Date(payment.created_at))}</p>
                   </li>
                 )
@@ -232,6 +369,7 @@ export default async function DashboardSectionPage({
     const eventById = new Map((events ?? []).map((event) => [event.id, event]))
     const visibleRegistrations = (registrations ?? []).filter((registration) => {
       if (section === 'workshops') return eventById.get(registration.event_id)?.category === 'Workshop'
+      if (section === 'competitions') return eventById.get(registration.event_id)?.category.toLowerCase().includes('competition')
       if (section === 'events') return eventById.get(registration.event_id)?.category !== 'Workshop'
       return true
     })

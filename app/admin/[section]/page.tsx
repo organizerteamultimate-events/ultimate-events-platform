@@ -22,6 +22,11 @@ import type { EventRecord } from '@/lib/events'
 import { AdminEventManager } from '@/components/dashboard/admin-event-manager'
 import { AdminPaymentReview, type AdminPaymentRecord } from '@/components/dashboard/admin-payment-review'
 import { AdminRegistrationList, type AdminRegistrationRecord } from '@/components/dashboard/admin-registration-list'
+import { AdminParticipantManager, type AdminParticipantRecord } from '@/components/dashboard/admin-participant-manager'
+import { AdminPaymentSettings } from '@/components/dashboard/admin-payment-settings'
+import { AdminSubmissionReview, type AdminSubmissionRecord } from '@/components/dashboard/admin-submission-review'
+import { AdminWinnerManager, type AdminWinnerRecord, type WinnerCandidate } from '@/components/dashboard/admin-winner-manager'
+import { AdminCertificateManager, type AdminCertificateRecord, type CompletedEventRecord } from '@/components/dashboard/admin-certificate-manager'
 
 const sections = {
   users: {
@@ -130,49 +135,35 @@ export async function generateMetadata({
 
 export default async function AdminSectionPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ section: string }>
+  searchParams: Promise<{ q?: string }>
 }) {
-  const { section } = await params
+  const [{ section }, query] = await Promise.all([params, searchParams])
   if (!(section in sections)) notFound()
   const details = sections[section as SectionKey]
   const Icon = details.icon
 
   if (section === 'users') {
     const supabase = await createSupabaseServerClient()
-    const { data: users, error } = supabase
-      ? await supabase
-          .from('profiles')
-          .select('id, full_name, email, mobile, organization, qualification, participant_id, role, created_at')
-          .order('created_at', { ascending: false })
+    const search = (query.q ?? '').trim().slice(0, 200)
+    const { data, error } = supabase
+      ? await supabase.rpc('admin_search_participants', {
+          p_query: search,
+          p_limit: 100,
+          p_offset: 0,
+        })
       : { data: null, error: new Error('Supabase is not configured.') }
     return (
       <>
         <PanelPageHeading eyebrow="Administration" title={details.title} description={details.description} />
         <PanelAccessNotice admin />
-        {error ? (
-          <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-            Participant records could not be loaded. Apply the profiles migration and verify admin access.
-          </p>
-        ) : users?.length ? (
-          <ul className="grid gap-3">
-            {users.map((user) => (
-              <li key={user.id} className="rounded-xl border bg-card p-5">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h2 className="font-semibold">{user.full_name}</h2>
-                    <p className="mt-1 text-sm text-muted-foreground">{user.email} · {user.mobile}</p>
-                    <p className="mt-1 text-sm text-muted-foreground">{[user.organization, user.qualification].filter(Boolean).join(' · ') || 'No organization or qualification provided'}</p>
-                  </div>
-                  <span className="rounded-full bg-accent px-3 py-1 text-xs font-semibold">{user.role}</span>
-                </div>
-                <p className="mt-3 font-mono text-xs text-muted-foreground">{user.participant_id}</p>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <EmptyState icon={Icon} title="No participant accounts" description="User profiles will appear here after accounts are registered." />
-        )}
+        <AdminParticipantManager
+          participants={(data ?? []) as AdminParticipantRecord[]}
+          search={search}
+          loadError={error ? 'Participant records could not be loaded. Apply the participant workflows migration and verify admin access.' : null}
+        />
       </>
     )
   }
@@ -182,7 +173,7 @@ export default async function AdminSectionPage({
     const { data, error } = supabase
       ? await supabase
           .from('events')
-          .select('id, title, category, description, event_date, registration_deadline, capacity, price, status, created_at')
+          .select('id, title, category, description, event_date, registration_opens_at, registration_deadline, capacity, price, status, created_at')
           .order('created_at', { ascending: false })
       : { data: null, error: new Error('Supabase is not configured.') }
 
@@ -297,6 +288,173 @@ export default async function AdminSectionPage({
       </>
     )
   }
+
+    if (section === 'settings') {
+      const supabase = await createSupabaseServerClient()
+      const { data, error } = supabase
+        ? await supabase
+            .from('platform_settings')
+            .select('upi_id, payment_instructions')
+            .eq('id', true)
+            .maybeSingle()
+        : { data: null, error: new Error('Supabase is not configured.') }
+
+      return (
+        <>
+          <PanelPageHeading eyebrow="Administration" title={details.title} description={details.description} />
+          <PanelAccessNotice admin />
+          <AdminPaymentSettings
+            initialUpiId={data?.upi_id ?? ''}
+            initialInstructions={data?.payment_instructions ?? ''}
+            loadError={error ? 'Payment settings could not be loaded. Apply the participant workflows migration and verify admin access.' : null}
+          />
+        </>
+      )
+    }
+
+    if (section === 'submissions') {
+      const supabase = await createSupabaseServerClient()
+      const { data: submissions, error: submissionError } = supabase
+        ? await supabase
+            .from('submissions')
+            .select('id, event_id, user_id, submission_url, notes, status, score, feedback, submitted_at')
+            .order('submitted_at', { ascending: false })
+        : { data: null, error: new Error('Supabase is not configured.') }
+      let rows: AdminSubmissionRecord[] = []
+      let loadError = submissionError
+        ? 'Submission records could not be loaded. Apply the participant workflows migration and verify admin access.'
+        : null
+
+      if (supabase && submissions?.length) {
+        const eventIds = [...new Set(submissions.map((submission) => submission.event_id))]
+        const userIds = [...new Set(submissions.map((submission) => submission.user_id))]
+        const [{ data: events, error: eventError }, { data: profiles, error: profileError }] = await Promise.all([
+          supabase.from('events').select('id, title').in('id', eventIds),
+          supabase.from('profiles').select('id, full_name, participant_id').in('id', userIds),
+        ])
+        if (eventError || profileError) {
+          loadError = 'Submission participant or event details could not be loaded.'
+        } else {
+          const eventById = new Map((events ?? []).map((event) => [event.id, event]))
+          const profileById = new Map((profiles ?? []).map((profile) => [profile.id, profile]))
+          rows = submissions.map((submission) => ({
+            ...submission,
+            event_title: eventById.get(submission.event_id)?.title ?? 'Event',
+            participant_name: profileById.get(submission.user_id)?.full_name ?? 'Participant',
+            participant_id: profileById.get(submission.user_id)?.participant_id ?? 'Unavailable',
+          })) as AdminSubmissionRecord[]
+        }
+      }
+      return (
+        <>
+          <PanelPageHeading eyebrow="Administration" title={details.title} description={details.description} />
+          <PanelAccessNotice admin />
+          <AdminSubmissionReview submissions={rows} loadError={loadError} />
+        </>
+      )
+    }
+
+    if (section === 'winners') {
+      const supabase = await createSupabaseServerClient()
+      const [{ data: submissions, error: submissionError }, { data: savedWinners, error: winnerError }] = supabase
+        ? await Promise.all([
+            supabase.from('submissions').select('event_id, user_id').eq('status', 'accepted'),
+            supabase.from('winners').select('id, event_id, user_id, place, award_title, published').order('created_at', { ascending: false }),
+          ])
+        : [
+            { data: null, error: new Error('Supabase is not configured.') },
+            { data: null, error: new Error('Supabase is not configured.') },
+          ]
+      let candidates: WinnerCandidate[] = []
+      let winners: AdminWinnerRecord[] = []
+      let loadError = submissionError || winnerError
+        ? 'Eligible winner candidates could not be loaded. Apply the participant workflows migration and verify admin access.'
+        : null
+      if (supabase && (submissions?.length || savedWinners?.length)) {
+        const eventIds = [...new Set([
+          ...(submissions ?? []).map((submission) => submission.event_id),
+          ...(savedWinners ?? []).map((winner) => winner.event_id),
+        ])]
+        const userIds = [...new Set([
+          ...(submissions ?? []).map((submission) => submission.user_id),
+          ...(savedWinners ?? []).map((winner) => winner.user_id),
+        ])]
+        const [{ data: events, error: eventError }, { data: profiles, error: profileError }] = await Promise.all([
+          supabase.from('events').select('id, title, status').in('id', eventIds),
+          supabase.from('profiles').select('id, full_name, participant_id').in('id', userIds),
+        ])
+        if (eventError || profileError) {
+          loadError = 'Winner candidate details could not be loaded.'
+        } else {
+          const completedEvents = new Map((events ?? []).map((event) => [event.id, event]))
+          const participants = new Map((profiles ?? []).map((profile) => [profile.id, profile]))
+          candidates = (submissions ?? []).flatMap((submission) => {
+            const event = completedEvents.get(submission.event_id)
+            const profile = participants.get(submission.user_id)
+            return event?.status === 'completed' && profile
+              ? [{
+                  event_id: event.id,
+                  event_title: event.title,
+                  user_id: profile.id,
+                  participant_name: profile.full_name,
+                  participant_id: profile.participant_id,
+                }]
+              : []
+          })
+          winners = (savedWinners ?? []).flatMap((winner) => {
+            const event = completedEvents.get(winner.event_id)
+            const profile = participants.get(winner.user_id)
+            return event && profile
+              ? [{
+                  id: winner.id,
+                  event_id: event.id,
+                  event_title: event.title,
+                  user_id: profile.id,
+                  participant_name: profile.full_name,
+                  participant_id: profile.participant_id,
+                  place: winner.place,
+                  award_title: winner.award_title,
+                  published: winner.published,
+                }]
+              : []
+          })
+        }
+      }
+      return (
+        <>
+          <PanelPageHeading eyebrow="Administration" title={details.title} description={details.description} />
+          <PanelAccessNotice admin />
+          <AdminWinnerManager candidates={candidates} winners={winners} loadError={loadError} />
+        </>
+      )
+    }
+
+    if (section === 'certificates') {
+      const supabase = await createSupabaseServerClient()
+      const [{ data: eventData, error: eventError }, { data: certificateData, error: certificateError }] = supabase
+        ? await Promise.all([
+            supabase.from('events').select('id, title').eq('status', 'completed').order('event_date', { ascending: false }),
+            supabase.from('certificates')
+              .select('id, certificate_number, recipient_name, participant_id, event_name, issued_at, revoked_at')
+              .order('issued_at', { ascending: false })
+              .limit(500),
+          ])
+        : [
+            { data: null, error: new Error('Supabase is not configured.') },
+            { data: null, error: new Error('Supabase is not configured.') },
+          ]
+      return (
+        <>
+          <PanelPageHeading eyebrow="Administration" title={details.title} description={details.description} />
+          <PanelAccessNotice admin />
+          <AdminCertificateManager
+            events={(eventData ?? []) as CompletedEventRecord[]}
+            certificates={(certificateData ?? []) as AdminCertificateRecord[]}
+            loadError={eventError || certificateError ? 'Certificate records could not be loaded. Apply the participant workflows migration and verify admin access.' : null}
+          />
+        </>
+      )
+    }
 
   return (
     <>

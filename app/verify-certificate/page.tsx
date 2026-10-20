@@ -4,14 +4,19 @@ import { CertificateVerifyForm } from '@/components/forms/simple-forms'
 
 export const metadata: Metadata = { title: 'Verify a Certificate' }
 
-export default function VerifyCertificatePage() {
+export default async function VerifyCertificatePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ certificate?: string }>
+}) {
+  const { certificate } = await searchParams
   return (
     <AuthShell
       title="Verify a certificate"
       description="Confirm that a certificate was issued by ULTIMATE EVENTS. Only the minimum details needed for verification are shown."
       feature="Certificate verification"
     >
-      <CertificateVerifyForm />
+      <CertificateVerifyForm initialCertificateNumber={certificate ?? ''} />
     </AuthShell>
   )
 }

@@ -13,21 +13,22 @@ Copy `.env.example` to `.env.local` and set:
   `NEXT_PUBLIC_SUPABASE_ANON_KEY` is also accepted.
 - `NEXT_PUBLIC_SITE_URL`: canonical public origin used for auth callbacks and email
   links; in local development this is typically `http://localhost:3000`.
-- `SUPABASE_SERVICE_ROLE_KEY`: server-only key for trusted backend tasks. Keep it
-  out of browser code and never commit it.
-- `RESEND_API_KEY`: optional server-only key when the project uses Resend instead
-  of SMTP for transactional email.
 - `EMAIL_FROM`: verified sender address used by the configured email provider.
+
+The app performs privileged actions with the signed-in administrator's Supabase
+session and database-checked RPCs; it does not need a service-role key. Do not
+add one to client or deployment variables for this app.
 
 Restart the Next.js development server after changing environment variables.
 
 ## 2. Reconcile and apply the current database schema
 
-The current application uses `profiles`, `events`, `registrations`, and
-`payments`. The application table for event sign-ups is named `registrations`;
-do not create a second `event_registrations` table. The app currently does not
-query courses, submissions, certificates, announcements, or other proposed
-tables, so this repair does not create unused schemas.
+The application uses `profiles`, `events`, `registrations`, `payments`,
+`platform_settings`, `submissions`, `winners`, `certificates`, and
+`notifications`. The sign-up table is named `registrations`; do not create a
+second `event_registrations` table. The reconciliation migration preserves
+legacy records, and the participant workflows migration adds the persistence
+required by the existing admin and participant panels.
 
 The existing Supabase project was inspected through its read-only REST API. It
 exposed legacy `events` columns `id`, `title`, `description`, `event_date`,
@@ -39,11 +40,13 @@ indexes, grants, and all column types have not been fully verified remotely.
 Do not run the migration until the preflight checks below confirm its
 assumptions.
 
-Apply this new forward migration only after that manual check:
+For a project with the inspected legacy tables, first apply the reconciliation
+migration after the preflight checks, then apply the participant workflows
+migration:
 
 `supabase/migrations/202610180001_reconcile_legacy_event_schema.sql`
 
-It adds the missing event columns `category`, `registration_deadline`,
+The reconciliation migration adds the missing event columns `category`, `registration_deadline`,
 `capacity`, `price`, `created_by`, and `updated_at`; creates the app-required
 `profiles` and `registrations` tables; and adds payment columns
 `registration_id`, `utr`, `status`, `verified_by`, and `verified_at`. The
@@ -69,11 +72,16 @@ To apply it manually:
    does not reconcile a pre-existing `profiles` or `registrations` table, and
    `ADD COLUMN IF NOT EXISTS` does not repair a pre-existing column of the
    wrong type.
-3. Open the migration file above in this repository, copy its complete contents
-   into a new SQL Editor query, and run it as the project owner.
-4. Confirm the query completed successfully. If it fails, do not retry blindly:
+3. Open `202610180001_reconcile_legacy_event_schema.sql` in this repository,
+   copy its complete contents into a new SQL Editor query, and run it as the project owner.
+4. After it succeeds, apply `202610200001_participant_workflows.sql` as a
+   separate SQL Editor query.
+5. Apply `202610200002_event_registration_and_payment_review.sql` as a
+   separate query to enable server-enforced registration opening times and
+   required payment rejection reasons.
+6. Confirm each query completed successfully. If one fails, do not retry blindly:
    preserve the full error and inspect the current schema/constraints first.
-5. After it succeeds, verify the tables, RLS policies, and app flows before
+7. Verify the tables, RLS policies, and app flows before
    using the project.
 
 The migration is transactional, repeatable, adds missing columns/tables and
@@ -87,6 +95,37 @@ legacy rows while checking new writes. Unique indexes can still fail if
 existing duplicate data violates their keys; the transaction then rolls back.
 This is intended as a non-destructive repair for the observed schema, but
 take a backup before applying it. It is not yet applied to the remote database.
+
+Then apply:
+
+`supabase/migrations/202610200001_participant_workflows.sql`
+
+This migration adds active/suspended/deleted profile status, persisted public UPI
+payment instructions, competition submissions and reviews, published winners,
+eligible certificates, verification records, and participant notifications. It
+adds server-side functions for participant search/management, atomic bulk
+payment review, payment settings, result publication, certificate issuance and
+revocation, and certificate verification. RLS is enabled for each new table;
+admin functions validate the active admin role in Postgres. Participant
+deletion is deliberately a data-preserving soft delete: contact details are
+anonymized and access is blocked, while registrations, payment records, and
+permanent participant IDs remain for audit/history. It does not delete
+`auth.users` or cascade away event history.
+
+For a fresh database, apply the migrations in order:
+
+1. `202610110001_profiles.sql`
+2. `202610110002_events.sql`
+3. `202610180001_reconcile_legacy_event_schema.sql`
+4. `202610200001_participant_workflows.sql`
+5. `202610200002_event_registration_and_payment_review.sql`
+
+The events migration now explicitly creates the legacy-compatible
+`payments.payment_status` field used by the reconciliation and review
+procedures. For an existing project, do not assume migration history or schema
+matches this sequence: inspect Supabase migration history and run the preflight
+queries before applying anything. These migrations have not been applied to
+the linked project from this workspace.
 
 Read-only preflight (run before the migration). First verify which tables
 actually exist and inspect every existing column/type:
@@ -157,6 +196,32 @@ from information_schema.column_privileges
 where table_schema = 'public'
   and table_name in ('profiles', 'events', 'registrations', 'payments')
 order by table_name, grantee, column_name, privilege_type;
+
+select n.nspname as schema_name, c.relname as table_name, c.relrowsecurity,
+       c.relforcerowsecurity
+from pg_class c
+join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public'
+  and c.relname in (
+    'profiles', 'events', 'registrations', 'payments', 'platform_settings',
+    'submissions', 'winners', 'certificates', 'notifications'
+  )
+order by c.relname;
+
+select p.proname, pg_get_function_identity_arguments(p.oid) as arguments,
+       p.prosecdef as security_definer, p.proconfig
+from pg_proc p
+join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public'
+  and p.proname in (
+    'is_admin', 'register_for_event', 'submit_upi_payment',
+    'review_upi_payment', 'review_upi_payments', 'update_payment_settings',
+    'admin_search_participants', 'manage_participant',
+    'review_competition_submission', 'manage_event_winner',
+    'issue_event_certificates', 'revoke_certificate', 'verify_certificate',
+    'get_published_winners', 'set_notification_read'
+  )
+order by p.proname, arguments;
 ```
 
 After confirming each column exists, check duplicate keys using its actual
@@ -180,6 +245,14 @@ group by event_id, user_id having count(*) > 1;
 select registration_id, count(*) from public.payments
 where registration_id is not null and status = 'pending'
 group by registration_id having count(*) > 1;
+
+-- Run when the relevant tables/columns already exist:
+select event_id, place, count(*) from public.winners
+group by event_id, place having count(*) > 1;
+select event_id, user_id, count(*) from public.winners
+group by event_id, user_id having count(*) > 1;
+select registration_id, count(*) from public.certificates
+where revoked_at is null group by registration_id having count(*) > 1;
 ```
 
 Do not delete or rewrite existing rows to make these checks pass. Investigate
@@ -190,7 +263,35 @@ The older files `202610110001_profiles.sql` and `202610110002_events.sql` are
 kept for migration history. Do not paste those older files after the repair
 migration. When using Supabase CLI later, first reconcile the remote migration
 history with `supabase migration list`; manually running SQL in Dashboard does
-not automatically record a CLI migration version.
+not automatically record a CLI migration version. A migration version marked
+applied is not proof its schema objects match these files. Review the actual
+columns, constraints, indexes, function signatures, grants, and RLS policies.
+
+Migration dependencies and app queries:
+
+| App workflow / query surface | Required schema and functions |
+| --- | --- |
+| Sign-up profile trigger, role checks, profile editor | `202610110001_profiles.sql`; reconciliation fills the legacy event/payment schema before workflows |
+| Public event list, event admin, event detail | Events base columns from `202610110002_events.sql`; `registration_opens_at` from `202610200002_event_registration_and_payment_review.sql` |
+| Registration and free/paid status | `registrations` and `register_for_event(uuid)` from reconciliation / `202610200001_participant_workflows.sql`; opening/deadline enforcement from `202610200002_event_registration_and_payment_review.sql` |
+| UPI instructions and transaction references | `platform_settings`, `submit_upi_payment(uuid,text)`, payment columns and RLS from reconciliation / participant workflows |
+| Admin payment review and participant payment history | Payment columns from reconciliation; `rejection_reason` and the three-argument review RPCs from `202610200002_event_registration_and_payment_review.sql` |
+| Participant search, account status, submissions, results, certificates, notifications | `202610200001_participant_workflows.sql` and its RPCs/tables |
+
+The reconciliation migration assumes the observed legacy `events` and
+`payments` tables and only accepts the column/type variants checked at its
+start. `CREATE TABLE IF NOT EXISTS` does not repair an existing table with a
+partial or different shape. The workflow migration likewise does not reconcile
+pre-existing `platform_settings`, `submissions`, `winners`, `certificates`, or
+`notifications` tables. Stop if any such table exists with a different shape,
+custom grants/policies, dependent views/functions, duplicate keys, or unknown
+ownership. In particular, reconciliation intentionally replaces policies and
+table grants on `profiles`, `events`, `registrations`, and `payments`; the
+workflow migration changes grants on the workflow tables and replaces several
+same-signature functions. `202610200002` replaces the old two-argument payment
+review RPCs with three-argument forms. It is transaction-wrapped and safe to
+rerun after it succeeds, but custom dependencies on the old RPC signatures
+must be reviewed first. Never add `CASCADE` to make a drop succeed.
 
 After running it, verify the schema and enabled RLS without reading user data:
 
@@ -215,7 +316,33 @@ from pg_policies
 where schemaname = 'public'
   and tablename in ('profiles', 'events', 'registrations', 'payments')
 order by tablename, policyname;
+
+select table_name, column_name, data_type
+from information_schema.columns
+where table_schema = 'public'
+  and (
+    (table_name = 'profiles' and column_name in ('participant_id', 'account_status'))
+    or (table_name = 'events' and column_name in ('registration_opens_at', 'registration_deadline'))
+    or (table_name = 'payments' and column_name in ('registration_id', 'utr', 'status', 'rejection_reason'))
+  )
+order by table_name, column_name;
+
+select p.proname, pg_get_function_identity_arguments(p.oid) as arguments,
+       has_function_privilege('anon', p.oid, 'EXECUTE') as anon_can_execute,
+       has_function_privilege('authenticated', p.oid, 'EXECUTE') as authenticated_can_execute
+from pg_proc p
+join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public'
+  and p.proname in ('register_for_event', 'submit_upi_payment', 'review_upi_payment', 'review_upi_payments')
+order by p.proname, arguments;
 ```
+
+Expected: all four core tables report `relrowsecurity = true`; the expected
+columns above exist; registration and payment submissions are executable by
+`authenticated` but not `anon`; payment-review RPCs use
+`(uuid, boolean, text)` and `(uuid[], boolean, text)` and are not executable
+by `anon`. Stop if any result differs. Confirm RLS policies and constraints
+against the migration definitions before testing with dedicated accounts.
 
 ## 3. Configure Auth
 
@@ -250,15 +377,19 @@ stored role on the server and in middleware.
 ## UPI payment configuration
 
 This project currently uses **manual UPI verification**, not a payment gateway.
-Set `NEXT_PUBLIC_UPI_ID` to the business UPI address in `.env.local` and restart
-Next.js. Participants launch their UPI app (where supported), transfer the
-displayed amount, and submit the transaction reference. The registration stays
-pending until an administrator checks the transfer and verifies it in
-**Admin → Payments**. Rejection leaves the registration unconfirmed and permits
-the participant to submit a corrected reference. Do not mark payments paid
-based only on client-side input or screenshots. A Razorpay/other gateway is not
-connected; use its signed server-side webhook and idempotency checks before
-switching away from manual review.
+After the reconciliation, participant-workflows, and payment-review migrations
+are applied and the first admin has been bootstrapped, set the business UPI ID
+and participant-facing instructions in **Admin → Settings**.
+These values are stored in the existing Supabase project, not in a public
+environment variable. Participants launch their UPI app (where supported),
+transfer the displayed amount, and submit the transaction reference. The
+registration stays pending until an administrator checks the transfer and
+verifies it in **Admin → Payments**. Individual and bulk reviews are validated
+and committed in Postgres; rejection leaves the registration unconfirmed and
+permits a corrected reference. Do not mark payments paid based only on
+client-side input or screenshots. A Razorpay/other gateway is not connected;
+use its signed server-side webhook and idempotency checks before switching away
+from manual review.
 Canceling an event does not automatically refund a verified UPI transfer;
 resolve refunds separately with the participant and payment provider.
 
@@ -268,8 +399,13 @@ Supabase Auth handles account verification and password-reset emails. For
 production, configure Supabase **Authentication → SMTP Settings** using Gmail
 SMTP or another transactional SMTP provider.
 
-The app also sends registration notices and verified-payment receipts from the
-server using SMTP. For Gmail:
+The app also sends registration notices, payment receipts, account-status
+notices, submission reviews, winner announcements, and certificate notices
+from the server using SMTP. Dashboard notifications are persisted separately
+from email delivery. The app checks that SMTP accepted the recipient address;
+this is not a delivery receipt and does not prove that the message reached the
+inbox. Email retries are not durably queued, so inspect the status before
+retrying to avoid duplicate notices. For Gmail:
 
 1. Enable 2-Step Verification on the Google account.
 2. Create a Google **App Password** for this application (do not use the normal
@@ -282,19 +418,57 @@ server using SMTP. For Gmail:
    `NEXT_PUBLIC_`, commit `.env.local`, or expose the app password to clients.
 
 If SMTP is not configured, registration and payment status still persist, but
-the UI reports that the email was not delivered. Configure the same SMTP
-provider separately in Supabase Auth for account-related messages.
+the UI reports that the email could not be accepted by SMTP. Configure the same
+SMTP provider separately in Supabase Auth for account-related messages.
 
-## Included workflows and remaining integrations
+## Workflow coverage, email, and deployment limits
 
-Supabase-backed sign-up, email verification callback, login, logout, password
-reset, session refresh, profile creation, participant IDs, and user/admin page
-access checks are included. For a database with the inspected legacy schema,
-apply the forward reconciliation migration above; it supersedes the two older
-profile/events migrations for that starting state. After the applicable schema
-migration has been successfully applied, published event discovery, user
-registration, pending manual UPI submissions, admin event publishing/payment
-verification, participant registration/payment records, registration notices,
-and verified-payment receipts are connected. Competition judging/submissions,
-certificates, winners, and general announcement delivery remain separate
-integrations; no scores, certificates, or other demo records are generated.
+The application code contains Supabase-backed sign-up, email verification
+callback, login, logout, password reset, session refresh, profile creation,
+permanent participant IDs, active-account checks, server/database admin
+authorization, event registration, manual UPI review, participant account
+management, submissions/reviews, published results, eligible certificate
+issuance/revocation, PDF downloads, verification, and participant
+notifications. These workflows depend on the migrations above. They have not
+been end-to-end tested against the existing Supabase project from this
+workspace; code presence and HTTP 200 responses do not establish that database
+operations or RLS policies work. Do not treat this app as production-ready until
+the migrations are reviewed/applied and an authenticated staging workflow
+passes.
+
+`tests/migration-contract.test.mjs` checks source-level migration contracts
+(required RPC guards, grants, RLS declarations, and registration uniqueness).
+These tests do not parse or execute PostgreSQL and do not replace the read-only
+preflight or an isolated PostgreSQL integration test.
+
+Still disconnected in the current application:
+
+- Admin task creation/editing and participant task assignment.
+- Admin announcement composition, consent/recipient selection, preview, and
+  durable delivery logs. Existing registration/status/result emails are
+  individual transactional notices, not a campaign system.
+- Secure project file uploads. Competition submissions currently store
+  validated HTTP(S) URLs; the app does not upload to private Supabase Storage,
+  issue signed URLs, or define storage-bucket policies.
+- Durable audit-log records for sensitive admin actions.
+- Database-derived registration/payment/event reports and CSV exports.
+
+Do not claim these admin sections are operational or enable them for production
+until their persistence, authorization, validation, and tests are implemented.
+No event, payment, score, winner, submission, or certificate demo records are
+generated.
+
+The existing Vercel project metadata is present in the local workspace and no
+`vercel.json` override is required. Keep the existing Vercel project; configure
+the public Supabase URL/key, `NEXT_PUBLIC_SITE_URL`, and server-side SMTP values
+in that project's environment settings. Never add the Supabase service-role key
+to `NEXT_PUBLIC_*` variables. `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`,
+`SMTP_APP_PASSWORD`, and `EMAIL_FROM` are used by server-side mail. The app
+reports SMTP acceptance only; SMTP acceptance does not confirm inbox delivery.
+Supabase Auth SMTP is configured separately in the Supabase dashboard.
+
+The Vercel deployment state and build logs were not verified in this workspace:
+no authenticated Vercel CLI or deployment inspection was available. The
+Supabase CLI is not linked to a project, and no local PostgreSQL/Docker
+environment was available to validate or execute migrations. Do not apply the
+migrations automatically from this workspace or assume production is ready.

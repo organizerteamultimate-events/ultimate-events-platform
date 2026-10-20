@@ -20,22 +20,25 @@ const managementLinks = [
   { label: 'Review payments', href: '/admin/payments', icon: CreditCard },
   { label: 'Competition submissions', href: '/admin/submissions', icon: Activity },
   { label: 'Certificates & awards', href: '/admin/certificates', icon: Award },
+  { label: 'UPI payment settings', href: '/admin/settings', icon: CreditCard },
   { label: 'Reports & exports', href: '/admin/reports', icon: FileBarChart },
 ]
 
 export default async function AdminDashboardPage() {
   const supabase = await createSupabaseServerClient()
   let metrics = { users: null as number | null, events: null as number | null, registrations: null as number | null, payments: null as number | null }
+  let recent: Array<{ id: string; event_title: string; participant_name: string; status: string; created_at: string }> = []
   let metricsError: string | null = null
 
   if (supabase) {
-    const [users, events, registrations, payments] = await Promise.all([
+    const [users, events, registrations, payments, recentRegistrations] = await Promise.all([
       supabase.from('profiles').select('id', { count: 'exact', head: true }),
       supabase.from('events').select('id', { count: 'exact', head: true }).eq('status', 'published'),
       supabase.from('registrations').select('id', { count: 'exact', head: true }),
       supabase.from('payments').select('id', { count: 'exact', head: true }).eq('status', 'verified'),
+      supabase.from('registrations').select('id, event_id, user_id, status, created_at').order('created_at', { ascending: false }).limit(5),
     ])
-    if (users.error || events.error || registrations.error || payments.error) {
+    if (users.error || events.error || registrations.error || payments.error || recentRegistrations.error) {
       metricsError = 'Live metrics are unavailable. Apply the events migration and check Supabase RLS policies.'
     } else {
       metrics = {
@@ -43,6 +46,27 @@ export default async function AdminDashboardPage() {
         events: events.count ?? 0,
         registrations: registrations.count ?? 0,
         payments: payments.count ?? 0,
+      }
+      if (recentRegistrations.data?.length) {
+        const eventIds = [...new Set(recentRegistrations.data.map((registration) => registration.event_id))]
+        const userIds = [...new Set(recentRegistrations.data.map((registration) => registration.user_id))]
+        const [{ data: eventRows, error: eventError }, { data: profileRows, error: profileError }] = await Promise.all([
+          supabase.from('events').select('id, title').in('id', eventIds),
+          supabase.from('profiles').select('id, full_name').in('id', userIds),
+        ])
+        if (eventError || profileError) {
+          metricsError = 'Recent registrations could not be completed with participant and event details.'
+        } else {
+          const eventById = new Map((eventRows ?? []).map((event) => [event.id, event.title]))
+          const profileById = new Map((profileRows ?? []).map((profile) => [profile.id, profile.full_name]))
+          recent = recentRegistrations.data.map((registration) => ({
+            id: registration.id,
+            event_title: eventById.get(registration.event_id) ?? 'Event',
+            participant_name: profileById.get(registration.user_id) ?? 'Participant',
+            status: registration.status,
+            created_at: registration.created_at,
+          }))
+        }
       }
     }
   }
@@ -86,13 +110,20 @@ export default async function AdminDashboardPage() {
 
         <section aria-labelledby="recent-activity-heading">
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">Monitoring</p>
-          <h2 id="recent-activity-heading" className="mb-4 mt-1 text-xl font-bold">Recent activity</h2>
-          <EmptyState
-            icon={Activity}
-            title="No activity records"
-            description="Audit logs, registrations, and platform updates will appear here once the database and admin services are connected."
-            className="h-[calc(100%-3.25rem)]"
-          />
+          <h2 id="recent-activity-heading" className="mb-4 mt-1 text-xl font-bold">Recent registrations</h2>
+          {recent.length ? (
+            <ul className="grid gap-3">
+              {recent.map((registration) => (
+                <li key={registration.id} className="rounded-xl border bg-card p-4">
+                  <p className="font-semibold">{registration.event_title}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">{registration.participant_name} · <span className="capitalize">{registration.status}</span></p>
+                  <p className="mt-1 text-xs text-muted-foreground">{new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(registration.created_at))}</p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState icon={Activity} title="No registrations yet" description="New participant registrations will appear here." className="h-[calc(100%-3.25rem)]" />
+          )}
         </section>
       </div>
     </>

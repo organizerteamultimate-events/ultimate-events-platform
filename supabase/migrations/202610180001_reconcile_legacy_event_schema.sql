@@ -205,6 +205,26 @@ create table if not exists public.registrations (
   unique (event_id, user_id)
 );
 
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conrelid = 'public.registrations'::regclass
+      and contype in ('p', 'u')
+      and conkey = array[
+        (select attnum from pg_attribute
+         where attrelid = 'public.registrations'::regclass and attname = 'event_id'),
+        (select attnum from pg_attribute
+         where attrelid = 'public.registrations'::regclass and attname = 'user_id')
+      ]::smallint[]
+  ) then
+    alter table public.registrations
+      add constraint registrations_event_user_key unique (event_id, user_id);
+  end if;
+end;
+$$;
+
 create index if not exists registrations_user_created_idx
   on public.registrations (user_id, created_at desc);
 create index if not exists registrations_event_status_idx

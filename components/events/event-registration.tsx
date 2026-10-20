@@ -18,6 +18,9 @@ export function EventRegistration({
   registration,
   hasPendingPayment,
   authenticated,
+  upiId,
+  paymentInstructions,
+  paymentSettingsError,
 }: {
   eventId: string
   eventTitle: string
@@ -25,18 +28,19 @@ export function EventRegistration({
   registration: Registration | null
   hasPendingPayment: boolean
   authenticated: boolean
+  upiId: string | null
+  paymentInstructions: string
+  paymentSettingsError: string | null
 }) {
   const [currentRegistration, setCurrentRegistration] = useState(registration)
   const [paymentPending, setPaymentPending] = useState(hasPendingPayment)
   const [utr, setUtr] = useState('')
   const [message, setMessage] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
-  const upiId = process.env.NEXT_PUBLIC_UPI_ID
-
   async function register() {
     setMessage(null)
     if (price > 0 && !upiId) {
-      setMessage('Paid-event registration is temporarily unavailable. The organizer must configure NEXT_PUBLIC_UPI_ID first.')
+      setMessage('Paid-event registration is temporarily unavailable. The organizer must configure payment details in the admin panel.')
       return
     }
     const supabase = createSupabaseBrowserClient()
@@ -73,10 +77,10 @@ export function EventRegistration({
         })
         if (!response.ok) {
           const result = await response.json() as { error?: string }
-          setMessage(`${registrationMessage} Email notice was not sent: ${result.error ?? 'email service unavailable'}`)
+          setMessage(`${registrationMessage} SMTP did not accept the email: ${result.error ?? 'email service unavailable'}`)
         }
       } catch {
-        setMessage(`${registrationMessage} Email notice could not be delivered; your registration is saved.`)
+        setMessage(`${registrationMessage} Email acceptance could not be confirmed; your registration is saved.`)
       }
     } catch (error) {
       setMessage(`Registration failed: ${error instanceof Error ? error.message : 'Unexpected connection error.'}`)
@@ -94,7 +98,7 @@ export function EventRegistration({
       return
     }
     if (!upiId) {
-      setMessage('UPI payment is not configured yet. The event organizer must set NEXT_PUBLIC_UPI_ID before accepting payments.')
+      setMessage('UPI payment is not configured yet. The event organizer must set payment details in the admin panel.')
       return
     }
 
@@ -174,6 +178,8 @@ export function EventRegistration({
             </p>
           )}
           {!upiId && <p className="mt-2 text-sm text-muted-foreground">UPI payment instructions are not available until the organizer configures the UPI ID.</p>}
+          {paymentInstructions && <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{paymentInstructions}</p>}
+          {paymentSettingsError && <p role="alert" className="mt-3 text-sm text-destructive">{paymentSettingsError}</p>}
           <form onSubmit={submitPayment} className="mt-4 flex flex-col gap-3">
             <label htmlFor="upi-utr" className="text-sm font-medium">UPI transaction reference / UTR</label>
             <input id="upi-utr" value={utr} onChange={(e) => setUtr(e.target.value)} className={inputClass} minLength={6} maxLength={100} required autoComplete="off" />

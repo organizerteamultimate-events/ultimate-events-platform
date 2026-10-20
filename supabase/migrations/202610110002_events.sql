@@ -97,6 +97,7 @@ create table if not exists public.payments (
 alter table public.payments
   add column if not exists registration_id uuid references public.registrations (id),
   add column if not exists utr text,
+  add column if not exists payment_status text,
   add column if not exists status text
     check (status in ('pending', 'verified', 'rejected')),
   add column if not exists verified_by uuid references auth.users (id),

@@ -36,7 +36,7 @@ export async function POST(request: NextRequest) {
   if (!registration) return NextResponse.json({ error: 'Registration not found.' }, { status: 404 })
 
   const [{ data: profile, error: profileError }, { data: event, error: eventError }] = await Promise.all([
-    supabase.from('profiles').select('email, full_name').eq('id', authData.user.id).maybeSingle(),
+    supabase.from('profiles').select('email, full_name, account_status').eq('id', authData.user.id).maybeSingle(),
     supabase.from('events').select('title').eq('id', registration.event_id).maybeSingle(),
   ])
   if (profileError || eventError) {
@@ -44,6 +44,9 @@ export async function POST(request: NextRequest) {
   }
   if (!profile?.email || !event?.title) {
     return NextResponse.json({ error: 'A verified profile email or event title is unavailable.' }, { status: 409 })
+  }
+  if (profile.account_status !== 'active') {
+    return NextResponse.json({ error: 'An active participant account is required.' }, { status: 403 })
   }
 
   const isConfirmed = registration.status === 'confirmed'
@@ -63,12 +66,12 @@ export async function POST(request: NextRequest) {
       text: `Hello ${name},\n\n${statusText}\nEvent: ${event.title}\nRegistration ID: ${registration.id}\n\nULTIMATE EVENTS`,
       html: `<p>Hello ${safeName},</p><p>${safeStatus}</p><p><strong>Event:</strong> ${safeTitle}<br><strong>Registration ID:</strong> ${registration.id}</p><p>ULTIMATE EVENTS</p>`,
     })
-    return NextResponse.json({ sent: true })
+    return NextResponse.json({ accepted: true, status: 'accepted' })
   } catch (error) {
     console.error('Registration notification delivery failed', error)
     const message = error instanceof Error && error.message.includes('not configured')
       ? error.message
-      : 'Email could not be delivered. Verify the server-side SMTP settings.'
+      : 'Email was not accepted by SMTP. Verify the server-side SMTP settings.'
     return NextResponse.json({ error: message }, { status: 503 })
   }
 }

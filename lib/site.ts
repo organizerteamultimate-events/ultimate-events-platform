@@ -43,7 +43,7 @@ export const setupChecklist: SetupItem[] = [
   {
     name: 'Manual UPI payments',
     purpose: 'UPI transaction references remain pending until an administrator verifies the transfer.',
-    requires: 'NEXT_PUBLIC_UPI_ID set to the organization’s UPI address; no payment gateway is currently connected.',
+    requires: 'Apply the participant workflows migration, then set the organization UPI ID and instructions in Admin → Settings; no payment gateway is connected.',
   },
   {
     name: 'Code judging service',

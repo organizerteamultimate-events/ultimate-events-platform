@@ -167,11 +167,14 @@ export function PanelShell({
       <div className="lg:pl-64">
         <header className="sticky top-0 z-20 border-b bg-card/95 backdrop-blur">
           <div className="mx-auto flex h-16 max-w-[1600px] items-center justify-between gap-4 px-4 sm:px-6">
-            <div>
-              <p className="text-sm font-semibold">{title}</p>
-              <p className="hidden text-xs text-muted-foreground sm:block">
-                {isAdmin ? 'Manage the ULTIMATE EVENTS platform' : 'Your learning and event activity'}
-              </p>
+            <div className="flex min-w-0 items-center gap-3">
+              <Logo compact className="lg:hidden" />
+              <div className="min-w-0">
+                <p className="text-sm font-semibold">{title}</p>
+                <p className="hidden text-xs text-muted-foreground sm:block">
+                  {isAdmin ? 'Manage the ULTIMATE EVENTS platform' : 'Your learning and event activity'}
+                </p>
+              </div>
             </div>
             <div className="flex items-center gap-3">
               <Link href="/" className="hidden text-sm font-medium text-muted-foreground hover:text-foreground sm:block">
@@ -230,7 +233,7 @@ export function PanelAccessNotice({ admin = false }: { admin?: boolean }) {
         <p className="font-semibold">
           {admin
             ? configured
-              ? 'Supabase Auth and admin access checks are enabled.'
+              ? 'Supabase Auth and role-based admin access checks are enabled.'
               : 'Admin workspace preview — not access-controlled yet.'
             : configured
               ? 'Supabase Auth and participant profiles are enabled.'
@@ -239,10 +242,10 @@ export function PanelAccessNotice({ admin = false }: { admin?: boolean }) {
         <p className="mt-1 leading-relaxed text-amber-900/85">
           {admin
             ? configured
-              ? 'Event publishing and manual UPI review are available after the events migration is applied. Competition, certificate, and announcement workflows are separate integrations.'
+              ? 'Apply the ordered Supabase migrations to enable event, payment, participant, result, and certificate workflows. SMTP settings are required for email delivery.'
               : 'Database, server-side admin authorization, and management actions must be configured before this workspace can handle real records. Do not use it with production data.'
             : configured
-              ? 'Published events, registration, and manual UPI tracking require the events migration. Competition judging and certificates are separate workflows.'
+              ? 'Your registrations, payments, submissions, results, notifications, and eligible certificates are loaded from your account records.'
               : 'Authentication and the database are awaiting configuration. Your profile, participant ID, registrations, and activity are not being loaded or saved yet.'}{' '}
           <Link href="/setup" className="font-semibold underline underline-offset-2">
             View setup requirements

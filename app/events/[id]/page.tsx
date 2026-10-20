@@ -26,7 +26,7 @@ export default async function EventDetailsPage({
   if (!supabase) notFound()
   const { data: event, error } = await supabase
     .from('events')
-    .select('id, title, category, description, event_date, registration_deadline, capacity, price, status')
+    .select('id, title, category, description, event_date, registration_opens_at, registration_deadline, capacity, price, status')
     .eq('id', id)
     .eq('status', 'published')
     .maybeSingle()
@@ -45,6 +45,11 @@ export default async function EventDetailsPage({
   if (!event) notFound()
 
   const { data: authData } = await supabase.auth.getUser()
+  const { data: paymentSettings, error: paymentSettingsError } = await supabase
+    .from('platform_settings')
+    .select('upi_id, payment_instructions')
+    .eq('id', true)
+    .maybeSingle()
   let registration: { id: string; status: string; payment_status: string } | null = null
   let hasPendingPayment = false
   if (authData.user) {
@@ -85,6 +90,12 @@ export default async function EventDetailsPage({
                   : 'To be announced'}
               </dd>
             </div>
+            {event.registration_opens_at && (
+              <div>
+                <dt className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Registration opens</dt>
+                <dd className="mt-1 font-medium">{new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(event.registration_opens_at))}</dd>
+              </div>
+            )}
             <div>
               <dt className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Registration fee</dt>
               <dd className="mt-1 font-medium">{Number(event.price) === 0 ? 'Free' : `₹${Number(event.price).toFixed(2)}`}</dd>
@@ -108,6 +119,9 @@ export default async function EventDetailsPage({
           registration={registration}
           hasPendingPayment={hasPendingPayment}
           authenticated={Boolean(authData.user)}
+          upiId={paymentSettings?.upi_id ?? null}
+          paymentInstructions={paymentSettings?.payment_instructions ?? ''}
+          paymentSettingsError={paymentSettingsError ? 'The payment settings migration has not been applied or settings could not be loaded.' : null}
         />
       </div>
     </>

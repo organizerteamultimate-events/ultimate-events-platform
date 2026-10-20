@@ -42,11 +42,11 @@ export function LoginForm({ variant = 'user' }: { variant?: 'user' | 'admin' }) 
       if (variant === 'admin') {
         const { data: profile, error: profileError } = await supabase
           .from('profiles')
-          .select('role')
+          .select('role, account_status')
           .eq('id', data.user.id)
           .maybeSingle()
 
-        if (profileError || !hasAdminAccess(profile?.role)) {
+        if (profileError || profile?.account_status !== 'active' || !hasAdminAccess(profile?.role)) {
           const { error: signOutError } = await supabase.auth.signOut()
           if (signOutError) {
             setResult(`Admin access was denied, and sign-out failed: ${signOutError.message}`)
@@ -55,7 +55,9 @@ export function LoginForm({ variant = 'user' }: { variant?: 'user' | 'admin' }) 
           setResult(
             profileError
               ? `Admin access could not be verified: ${profileError.message}`
-              : 'This account is not authorized as an administrator.',
+              : profile?.account_status !== 'active'
+                ? 'This account is suspended or unavailable.'
+                : 'This account is not authorized as an administrator.',
           )
           return
         }
@@ -63,7 +65,30 @@ export function LoginForm({ variant = 'user' }: { variant?: 'user' | 'admin' }) 
         return
       }
 
-      router.push('/dashboard')
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('account_status')
+        .eq('id', data.user.id)
+        .maybeSingle()
+      if (profileError || profile?.account_status !== 'active') {
+        const { error: signOutError } = await supabase.auth.signOut()
+        setResult(
+          signOutError
+            ? `This account is unavailable and sign-out failed: ${signOutError.message}`
+            : profileError
+              ? `Account status could not be verified: ${profileError.message}`
+              : 'This account is suspended or unavailable. Contact support for assistance.',
+        )
+        return
+      }
+
+      const requestedDestination = new URLSearchParams(window.location.search).get('next')
+      const destination = requestedDestination?.startsWith('/')
+        && !requestedDestination.startsWith('//')
+        && !requestedDestination.includes('\\')
+        ? requestedDestination
+        : '/dashboard'
+      router.push(destination)
     } catch (error) {
       setResult(`Sign-in failed: ${error instanceof Error ? error.message : 'Unexpected connection error.'}`)
     } finally {

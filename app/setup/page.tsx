@@ -4,10 +4,15 @@ import { PageHeader } from '@/components/site/blocks'
 import { setupChecklist } from '@/lib/site'
 import { isSupabaseConfigured } from '@/lib/supabase/config'
 import { isTransactionalEmailConfigured } from '@/lib/email'
+import { createSupabaseServerClient } from '@/lib/supabase/server'
 
 export const metadata: Metadata = { title: 'Platform Status', robots: { index: false } }
 
-export default function SetupPage() {
+export default async function SetupPage() {
+  const supabase = await createSupabaseServerClient()
+  const { data: paymentSettings, error: paymentSettingsError } = supabase
+    ? await supabase.from('platform_settings').select('upi_id').eq('id', true).maybeSingle()
+    : { data: null, error: null }
   return (
     <>
       <PageHeader
@@ -23,7 +28,7 @@ export default function SetupPage() {
               : item.name === 'Email provider'
                 ? isTransactionalEmailConfigured() ? 'Server SMTP credentials configured' : 'SMTP credentials required'
                 : item.name === 'Manual UPI payments'
-                  ? process.env.NEXT_PUBLIC_UPI_ID ? 'UPI ID configured — manual verification' : 'UPI ID required'
+                  ? paymentSettingsError ? 'Apply participant workflows migration' : paymentSettings?.upi_id ? 'Configured in Admin settings' : 'Set UPI details in Admin settings'
                   : 'Awaiting configuration'
             return (
               <li key={item.name} className="flex flex-col gap-3 rounded-2xl border bg-card p-6 sm:flex-row sm:items-start sm:justify-between">

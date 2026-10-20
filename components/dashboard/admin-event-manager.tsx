@@ -7,6 +7,25 @@ import type { EventRecord } from '@/lib/events'
 import { createSupabaseBrowserClient } from '@/lib/supabase/client'
 import { FormResult, inputClass } from '@/components/forms/field'
 
+function formatDateTimeLocal(value: string | null) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+}
+
+function isValidSchedule(opensAt: string, deadline: string, eventDate: string) {
+  const opens = opensAt ? new Date(opensAt).getTime() : null
+  const closes = deadline ? new Date(deadline).getTime() : null
+  const event = eventDate ? new Date(eventDate).getTime() : null
+  return (opens === null || Number.isFinite(opens))
+    && (closes === null || Number.isFinite(closes))
+    && (event === null || Number.isFinite(event))
+    && (opens === null || closes === null || opens <= closes)
+    && (opens === null || event === null || opens <= event)
+    && (closes === null || event === null || closes <= event)
+}
+
 export function AdminEventManager({
   events,
   loadError,
@@ -33,6 +52,7 @@ export function AdminEventManager({
     const capacityValue = String(formData.get('capacity') ?? '')
     const capacity = capacityValue ? Number(capacityValue) : null
     const eventDateValue = String(formData.get('event_date') ?? '')
+    const opensAtValue = String(formData.get('registration_opens_at') ?? '')
     const deadlineValue = String(formData.get('registration_deadline') ?? '')
     const { data: authData, error: authError } = await supabase.auth.getUser()
 
@@ -45,6 +65,10 @@ export function AdminEventManager({
       setMessage('Enter an event title, valid category, non-negative fee, and positive whole-number capacity.')
       return
     }
+    if (!isValidSchedule(opensAtValue, deadlineValue, eventDateValue)) {
+      setMessage('Registration opening and deadline must be at or before the event date, and opening must be at or before the deadline.')
+      return
+    }
 
     setPending(true)
     try {
@@ -55,6 +79,7 @@ export function AdminEventManager({
         price,
         capacity,
         event_date: eventDateValue ? new Date(eventDateValue).toISOString() : null,
+        registration_opens_at: opensAtValue ? new Date(opensAtValue).toISOString() : null,
         registration_deadline: deadlineValue ? new Date(deadlineValue).toISOString() : null,
         status: 'draft',
         created_by: authData.user.id,
@@ -87,10 +112,15 @@ export function AdminEventManager({
     const capacityValue = String(formData.get('capacity') ?? '')
     const capacity = capacityValue ? Number(capacityValue) : null
     const eventDateValue = String(formData.get('event_date') ?? '')
+    const opensAtValue = String(formData.get('registration_opens_at') ?? '')
     const deadlineValue = String(formData.get('registration_deadline') ?? '')
     if (!id || title.length < 3 || !category || !Number.isFinite(price) || price < 0 ||
         (capacity !== null && (!Number.isInteger(capacity) || capacity < 1))) {
       setMessage('Enter a valid title, category, non-negative fee, and positive whole-number capacity.')
+      return
+    }
+    if (!isValidSchedule(opensAtValue, deadlineValue, eventDateValue)) {
+      setMessage('Registration opening and deadline must be at or before the event date, and opening must be at or before the deadline.')
       return
     }
 
@@ -103,6 +133,7 @@ export function AdminEventManager({
         price,
         capacity,
         event_date: eventDateValue ? new Date(eventDateValue).toISOString() : null,
+        registration_opens_at: opensAtValue ? new Date(opensAtValue).toISOString() : null,
         registration_deadline: deadlineValue ? new Date(deadlineValue).toISOString() : null,
       }).eq('id', id)
       if (error) {
@@ -118,7 +149,7 @@ export function AdminEventManager({
     }
   }
 
-  async function updateStatus(event: EventRecord, status: 'published' | 'cancelled' | 'completed') {
+  async function updateStatus(event: EventRecord, status: 'draft' | 'published' | 'cancelled' | 'completed') {
     setMessage(null)
     const supabase = createSupabaseBrowserClient()
     if (!supabase) {
@@ -132,7 +163,7 @@ export function AdminEventManager({
         setMessage(`Event status was not updated: ${error.message}`)
         return
       }
-      setMessage(`Event ${status === 'published' ? 'published' : status === 'completed' ? 'marked complete' : 'cancelled'}.`)
+      setMessage(`Event ${status === 'published' ? 'published' : status === 'draft' ? 'unpublished' : status === 'completed' ? 'marked complete' : 'cancelled'}.`)
       router.refresh()
     } catch (error) {
       setMessage(`Event status was not updated: ${error instanceof Error ? error.message : 'Unexpected connection error.'}`)
@@ -166,6 +197,10 @@ export function AdminEventManager({
           <label className="flex flex-col gap-1.5 text-sm font-medium">
             Event date and time
             <input name="event_date" type="datetime-local" className={inputClass} />
+          </label>
+          <label className="flex flex-col gap-1.5 text-sm font-medium">
+            Registration opens
+            <input name="registration_opens_at" type="datetime-local" className={inputClass} />
           </label>
           <label className="flex flex-col gap-1.5 text-sm font-medium">
             Registration deadline
@@ -220,11 +255,15 @@ export function AdminEventManager({
                         </label>
                         <label className="flex flex-col gap-1 text-sm font-medium">
                           Date and time
-                          <input name="event_date" type="datetime-local" className={inputClass} defaultValue={event.event_date ? new Date(new Date(event.event_date).getTime() - new Date(event.event_date).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ''} />
+                          <input name="event_date" type="datetime-local" className={inputClass} defaultValue={formatDateTimeLocal(event.event_date)} />
+                        </label>
+                        <label className="flex flex-col gap-1 text-sm font-medium">
+                          Registration opens
+                          <input name="registration_opens_at" type="datetime-local" className={inputClass} defaultValue={formatDateTimeLocal(event.registration_opens_at)} />
                         </label>
                         <label className="flex flex-col gap-1 text-sm font-medium">
                           Registration deadline
-                          <input name="registration_deadline" type="datetime-local" className={inputClass} defaultValue={event.registration_deadline ? new Date(new Date(event.registration_deadline).getTime() - new Date(event.registration_deadline).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ''} />
+                          <input name="registration_deadline" type="datetime-local" className={inputClass} defaultValue={formatDateTimeLocal(event.registration_deadline)} />
                         </label>
                         <label className="flex flex-col gap-1 text-sm font-medium">
                           Fee in INR
@@ -251,6 +290,7 @@ export function AdminEventManager({
                   )}
                   {event.status === 'published' && (
                     <>
+                      <button type="button" disabled={pending} onClick={() => updateStatus(event, 'draft')} className="rounded-lg border px-4 py-2 text-sm font-semibold disabled:opacity-60">Unpublish</button>
                       <button type="button" disabled={pending} onClick={() => updateStatus(event, 'completed')} className="rounded-lg border px-4 py-2 text-sm font-semibold disabled:opacity-60">Mark complete</button>
                       <button type="button" disabled={pending} onClick={() => updateStatus(event, 'cancelled')} className="rounded-lg border px-4 py-2 text-sm font-semibold disabled:opacity-60">Cancel</button>
                     </>

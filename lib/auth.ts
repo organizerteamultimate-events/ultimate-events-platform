@@ -58,6 +58,8 @@ export function getSiteUrl() {
   const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim()
   if (configured) return configured.replace(/\/+$/, '')
   if (typeof window !== 'undefined') return window.location.origin
+  const vercelOrigin = process.env.VERCEL_PROJECT_PRODUCTION_URL ?? process.env.VERCEL_URL
+  if (vercelOrigin) return `https://${vercelOrigin.replace(/^https?:\/\//, '').replace(/\/+$/, '')}`
   return 'http://localhost:3000'
 }
 
