@@ -1,7 +1,8 @@
 'use client'
 
 import Link from 'next/link'
-import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { useEffect, useState } from 'react'
 import { createSupabaseBrowserClient } from '@/lib/supabase/client'
 import { FormResult, SubmitButton, inputClass } from '@/components/forms/field'
 
@@ -9,6 +10,12 @@ type Registration = {
   id: string
   status: string
   payment_status: string
+  amount: number
+}
+
+type Payment = {
+  status: string
+  rejection_reason: string | null
 }
 
 export function EventRegistration({
@@ -16,9 +23,11 @@ export function EventRegistration({
   eventTitle,
   price,
   registration,
-  hasPendingPayment,
+  payment,
   authenticated,
   upiId,
+  accountHolderName,
+  qrImageUrl,
   paymentInstructions,
   paymentSettingsError,
 }: {
@@ -26,20 +35,30 @@ export function EventRegistration({
   eventTitle: string
   price: number
   registration: Registration | null
-  hasPendingPayment: boolean
+  payment: Payment | null
   authenticated: boolean
   upiId: string | null
+  accountHolderName: string | null
+  qrImageUrl: string | null
   paymentInstructions: string
   paymentSettingsError: string | null
 }) {
+  const router = useRouter()
   const [currentRegistration, setCurrentRegistration] = useState(registration)
-  const [paymentPending, setPaymentPending] = useState(hasPendingPayment)
+  const [currentPayment, setCurrentPayment] = useState(payment)
   const [utr, setUtr] = useState('')
   const [message, setMessage] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    setCurrentRegistration(registration)
+    setCurrentPayment(payment)
+  }, [registration, payment])
+
   async function register() {
     setMessage(null)
-    if (price > 0 && !upiId) {
+    if (price > 0 && (!upiId || paymentSettingsError)) {
       setMessage('Paid-event registration is temporarily unavailable. The organizer must configure payment details in the admin panel.')
       return
     }
@@ -60,14 +79,23 @@ export function EventRegistration({
         setMessage('Registration failed: the service returned no registration ID.')
         return
       }
-      setCurrentRegistration({
-        id: data,
-        status: price === 0 ? 'confirmed' : 'pending',
-        payment_status: price === 0 ? 'not_required' : 'pending',
-      })
-      const registrationMessage = price === 0
+      const { data: savedRegistration, error: savedRegistrationError } = await supabase
+        .from('registrations')
+        .select('id, status, payment_status, amount')
+        .eq('id', data)
+        .maybeSingle()
+      if (savedRegistrationError || !savedRegistration) {
+        setMessage('Registration was recorded, but its status could not be verified. Reload this page or contact support.')
+        router.refresh()
+        return
+      }
+      setCurrentRegistration(savedRegistration)
+      const registrationConfirmed = Number(savedRegistration.amount) === 0
+        || savedRegistration.payment_status === 'verified'
+      const registrationMessage = registrationConfirmed
         ? 'You are registered. Your place is confirmed.'
         : 'Registration saved. Complete the UPI payment below; your place is pending until an administrator verifies it.'
+      router.refresh()
       setMessage(registrationMessage)
       try {
         const response = await fetch('/api/notifications/registration', {
@@ -92,42 +120,57 @@ export function EventRegistration({
   async function submitPayment(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setMessage(null)
-    const supabase = createSupabaseBrowserClient()
-    if (!supabase || !currentRegistration) {
+    if (!currentRegistration) {
       setMessage('Sign in and register for this event before submitting payment details.')
       return
     }
-    if (!upiId) {
-      setMessage('UPI payment is not configured yet. The event organizer must set payment details in the admin panel.')
+    if (currentRegistration.amount <= 0) {
+      setMessage('Free registrations do not require a payment submission.')
+      return
+    }
+
+    const form = event.currentTarget
+    const receiptInput = form.elements.namedItem('receipt')
+    const receipt = receiptInput instanceof HTMLInputElement ? receiptInput.files?.[0] : null
+    if (!receipt || !['image/png', 'image/jpeg', 'image/webp'].includes(receipt.type) || receipt.size < 1 || receipt.size > 5 * 1024 * 1024) {
+      setMessage('Choose a PNG, JPEG, or WebP receipt image no larger than 5 MB.')
+      return
+    }
+    if (utr.trim().length < 6 || utr.trim().length > 100) {
+      setMessage('Enter a transaction reference between 6 and 100 characters.')
       return
     }
 
     setPending(true)
     try {
-      const { error } = await supabase.rpc('submit_upi_payment', {
-        p_registration_id: currentRegistration.id,
-        p_utr: utr.trim(),
-      })
-      if (error) {
-        setMessage(`Payment reference was not submitted: ${error.message}`)
+      const body = new FormData()
+      body.set('registrationId', currentRegistration.id)
+      body.set('utr', utr.trim())
+      body.set('receipt', receipt)
+      const response = await fetch('/api/payments/submit', { method: 'POST', body })
+      const result = await response.json() as { error?: string; status?: string }
+      if (!response.ok) {
+        setMessage(`Payment was not submitted: ${result.error ?? 'Unexpected server response.'}`)
         return
       }
-      setPaymentPending(true)
+      setCurrentPayment({ status: result.status ?? 'pending', rejection_reason: null })
       setCurrentRegistration({ ...currentRegistration, status: 'pending', payment_status: 'pending' })
-      setMessage('Payment reference submitted. Your registration remains pending until an administrator verifies the transfer.')
+      setMessage('Receipt and transaction reference submitted. Your registration remains pending until an administrator verifies the payment.')
+      form.reset()
       setUtr('')
     } catch (error) {
-      setMessage(`Payment reference was not submitted: ${error instanceof Error ? error.message : 'Unexpected connection error.'}`)
+      setMessage(`Payment was not submitted: ${error instanceof Error ? error.message : 'Unexpected connection error.'}`)
     } finally {
       setPending(false)
     }
   }
 
+  const paymentAmount = currentRegistration?.amount ?? price
   const upiLink = upiId
     ? `upi://pay?${new URLSearchParams({
         pa: upiId,
-        pn: 'ULTIMATE EVENTS',
-        am: Number(price).toFixed(2),
+        pn: accountHolderName ?? 'ULTIMATE EVENTS',
+        am: Number(paymentAmount).toFixed(2),
         cu: 'INR',
         tn: eventTitle,
       }).toString()}`
@@ -148,7 +191,7 @@ export function EventRegistration({
     <section aria-labelledby="registration-heading" className="rounded-2xl border bg-card p-6 shadow-sm">
       <h2 id="registration-heading" className="text-xl font-bold">Registration</h2>
       <p className="mt-2 text-sm text-muted-foreground">
-        {price === 0 ? 'This event is free.' : `Registration fee: ₹${Number(price).toFixed(2)}.`}
+        {paymentAmount === 0 ? 'This event is free.' : `Registration fee: ₹${Number(paymentAmount).toFixed(2)}.`}
       </p>
 
       {!currentRegistration ? (
@@ -164,33 +207,72 @@ export function EventRegistration({
         <div className="mt-5 rounded-xl bg-muted/60 p-4 text-sm">
           <p><span className="font-semibold">Registration ID:</span> <span className="break-all font-mono">{currentRegistration.id}</span></p>
           <p className="mt-2"><span className="font-semibold">Status:</span> {currentRegistration.status}</p>
-          <p className="mt-1"><span className="font-semibold">Payment:</span> {currentRegistration.payment_status.replace('_', ' ')}</p>
+          <p className="mt-1"><span className="font-semibold">Payment:</span> {currentPayment?.status === 'pending'
+            ? 'Pending Verification'
+            : currentPayment?.status === 'verified'
+              ? 'Verified'
+              : currentPayment?.status === 'rejected'
+                ? 'Rejected'
+                : currentRegistration.payment_status.replace('_', ' ')}</p>
         </div>
       )}
 
-      {currentRegistration && price > 0 && currentRegistration.payment_status !== 'verified' && !paymentPending && (
+      {currentRegistration && paymentAmount > 0 && currentPayment?.status !== 'verified' && (
         <div className="mt-5 border-t pt-5">
-          <h3 className="font-semibold">Pay by UPI</h3>
-          {upiLink && (
-            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-              Send exactly ₹{Number(price).toFixed(2)} to <span className="font-semibold text-foreground">{upiId}</span>.{' '}
-              <a href={upiLink} className="font-semibold text-foreground underline underline-offset-4">Open a UPI app</a>
+          <h3 className="font-semibold">Manual UPI payment</h3>
+          {upiId && !paymentSettingsError ? (
+            <div className="mt-3 space-y-3 text-sm">
+              <p>Pay exactly <strong>₹{Number(paymentAmount).toFixed(2)}</strong> to <strong>{upiId}</strong>.</p>
+              {accountHolderName && <p>Account holder: <strong>{accountHolderName}</strong></p>}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(upiId)
+                      setCopied(true)
+                    } catch {
+                      setMessage('Could not copy the UPI ID. Select and copy it manually.')
+                    }
+                  }}
+                  className="rounded-lg border px-3 py-2 font-semibold"
+                >
+                  {copied ? 'UPI ID copied' : 'Copy UPI ID'}
+                </button>
+                {upiLink && <a href={upiLink} className="rounded-lg border px-3 py-2 font-semibold">Open a UPI app</a>}
+              </div>
+              {qrImageUrl && <img src={qrImageUrl} alt="Organizer UPI payment QR code" className="size-52 rounded-lg border object-contain" />}
+            </div>
+          ) : (
+            <p role="status" className="mt-2 text-sm text-muted-foreground">
+              Online UPI details are not configured yet. Contact the organizer before making a payment.
             </p>
           )}
-          {!upiId && <p className="mt-2 text-sm text-muted-foreground">UPI payment instructions are not available until the organizer configures the UPI ID.</p>}
           {paymentInstructions && <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{paymentInstructions}</p>}
           {paymentSettingsError && <p role="alert" className="mt-3 text-sm text-destructive">{paymentSettingsError}</p>}
-          <form onSubmit={submitPayment} className="mt-4 flex flex-col gap-3">
-            <label htmlFor="upi-utr" className="text-sm font-medium">UPI transaction reference / UTR</label>
-            <input id="upi-utr" value={utr} onChange={(e) => setUtr(e.target.value)} className={inputClass} minLength={6} maxLength={100} required autoComplete="off" />
-            <SubmitButton pending={pending}>{pending ? 'Submitting…' : 'Submit for verification'}</SubmitButton>
-          </form>
+
+          {currentPayment?.status === 'pending' ? (
+            <p className="mt-4 rounded-lg border border-gold/40 bg-accent px-4 py-3 text-sm">
+              Pending Verification — receipt and transaction reference are awaiting administrator review. Your event place is not confirmed yet.
+            </p>
+          ) : (
+            <>
+              {currentPayment?.status === 'rejected' && (
+                <p className="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm">
+                  Payment Rejected{currentPayment.rejection_reason ? `: ${currentPayment.rejection_reason}` : '.'} Submit a corrected reference and receipt.
+                </p>
+              )}
+              <form onSubmit={submitPayment} className="mt-4 flex flex-col gap-3">
+                <label htmlFor="upi-utr" className="text-sm font-medium">UPI transaction reference / UTR</label>
+                <input id="upi-utr" name="utr" value={utr} onChange={(e) => setUtr(e.target.value)} className={inputClass} minLength={6} maxLength={100} required autoComplete="off" />
+                <label htmlFor="upi-receipt" className="text-sm font-medium">Payment receipt image</label>
+                <input id="upi-receipt" name="receipt" type="file" accept="image/png,image/jpeg,image/webp" className={inputClass} required />
+                <p className="text-xs text-muted-foreground">PNG, JPEG, or WebP, up to 5 MB. Stored privately and visible only to you and authorized admins.</p>
+                <SubmitButton pending={pending}>{pending ? 'Submitting…' : 'Submit for verification'}</SubmitButton>
+              </form>
+            </>
+          )}
         </div>
-      )}
-      {currentRegistration && paymentPending && (
-        <p className="mt-4 rounded-lg border border-gold/40 bg-accent px-4 py-3 text-sm">
-          Payment reference is awaiting administrator review. Your registration is not confirmed yet.
-        </p>
       )}
       <FormResult message={message} />
     </section>

@@ -4,15 +4,28 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import { Field, FormResult, SubmitButton, describedBy, inputClass } from './field'
-import { hasAdminAccess, validateLoginForm } from '@/lib/auth'
+import {
+  getSafeInternalDestination,
+  hasAdminAccess,
+  isActiveAccountStatus,
+  logAuthDiagnostic,
+  normalizeEmail,
+  validateLoginForm,
+} from '@/lib/auth'
 import { createSupabaseBrowserClient } from '@/lib/supabase/client'
 
-export function LoginForm({ variant = 'user' }: { variant?: 'user' | 'admin' }) {
+export function LoginForm({
+  variant = 'user',
+  initialMessage = null,
+}: {
+  variant?: 'user' | 'admin'
+  initialMessage?: string | null
+}) {
   const router = useRouter()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({})
-  const [result, setResult] = useState<string | null>(null)
+  const [result, setResult] = useState<string | null>(initialMessage)
   const [pending, setPending] = useState(false)
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -22,19 +35,20 @@ export function LoginForm({ variant = 'user' }: { variant?: 'user' | 'admin' }) 
     setErrors(found)
     if (Object.keys(found).length > 0) return
 
-    const supabase = createSupabaseBrowserClient()
-    if (!supabase) {
-      setResult('Sign-in is not available yet. Add the Supabase project URL and publishable key, then try again.')
-      return
-    }
-
     setPending(true)
     try {
+      const supabase = createSupabaseBrowserClient()
+      if (!supabase) {
+        setResult('Sign-in is not available yet. Check the Supabase project URL and publishable key configuration, then try again.')
+        return
+      }
+
       const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim().toLowerCase(),
+        email: normalizeEmail(email),
         password,
       })
       if (error) {
+        logAuthDiagnostic('Sign-in', error)
         setResult(`Sign-in failed: ${error.message}`)
         return
       }
@@ -46,22 +60,28 @@ export function LoginForm({ variant = 'user' }: { variant?: 'user' | 'admin' }) 
           .eq('id', data.user.id)
           .maybeSingle()
 
-        if (profileError || profile?.account_status !== 'active' || !hasAdminAccess(profile?.role)) {
+        if (profileError || !isActiveAccountStatus(profile?.account_status) || !hasAdminAccess(profile?.role)) {
+          if (profileError) logAuthDiagnostic('Admin profile verification', profileError)
           const { error: signOutError } = await supabase.auth.signOut()
           if (signOutError) {
+            logAuthDiagnostic('Admin sign-out after access rejection', signOutError)
             setResult(`Admin access was denied, and sign-out failed: ${signOutError.message}`)
             return
           }
+          router.refresh()
           setResult(
             profileError
               ? `Admin access could not be verified: ${profileError.message}`
-              : profile?.account_status !== 'active'
-                ? 'This account is suspended or unavailable.'
+              : !isActiveAccountStatus(profile?.account_status)
+                ? profile
+                  ? 'This account is suspended or unavailable.'
+                  : 'This account has no participant profile. Contact support to restore it.'
                 : 'This account is not authorized as an administrator.',
           )
           return
         }
-        router.push('/admin')
+        router.replace('/admin')
+        router.refresh()
         return
       }
 
@@ -70,26 +90,30 @@ export function LoginForm({ variant = 'user' }: { variant?: 'user' | 'admin' }) 
         .select('account_status')
         .eq('id', data.user.id)
         .maybeSingle()
-      if (profileError || profile?.account_status !== 'active') {
+      if (profileError || !isActiveAccountStatus(profile?.account_status)) {
+        if (profileError) logAuthDiagnostic('Profile status lookup', profileError)
         const { error: signOutError } = await supabase.auth.signOut()
+        if (signOutError) logAuthDiagnostic('Sign-out after account rejection', signOutError)
         setResult(
           signOutError
             ? `This account is unavailable and sign-out failed: ${signOutError.message}`
             : profileError
               ? `Account status could not be verified: ${profileError.message}`
-              : 'This account is suspended or unavailable. Contact support for assistance.',
+              : profile
+                ? 'This account is suspended or unavailable. Contact support for assistance.'
+                : 'This account has no participant profile. Contact support to restore it.',
         )
         return
       }
 
-      const requestedDestination = new URLSearchParams(window.location.search).get('next')
-      const destination = requestedDestination?.startsWith('/')
-        && !requestedDestination.startsWith('//')
-        && !requestedDestination.includes('\\')
-        ? requestedDestination
-        : '/dashboard'
-      router.push(destination)
+      const destination = getSafeInternalDestination(
+        new URLSearchParams(window.location.search).get('next'),
+        window.location.origin,
+      )
+      router.replace(destination)
+      router.refresh()
     } catch (error) {
+      logAuthDiagnostic('Sign-in', error)
       setResult(`Sign-in failed: ${error instanceof Error ? error.message : 'Unexpected connection error.'}`)
     } finally {
       setPending(false)

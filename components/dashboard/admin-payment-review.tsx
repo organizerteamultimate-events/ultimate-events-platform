@@ -10,6 +10,7 @@ export type AdminPaymentRecord = {
   user_id: string
   amount: number
   utr: string
+  receipt_path: string | null
   created_at: string
   participant_name: string
   participant_id: string
@@ -192,6 +193,18 @@ export function AdminPaymentReview({
                   <p className="mt-1 text-sm text-muted-foreground">{payment.participant_name} · {payment.participant_id}</p>
                   <p className="mt-3 text-sm"><span className="font-semibold">Amount:</span> ₹{Number(payment.amount).toFixed(2)}</p>
                   <p className="mt-1 break-all text-sm"><span className="font-semibold">UPI reference:</span> {payment.utr}</p>
+                  {payment.receipt_path ? (
+                    <a
+                      href={`/api/admin/payments/${encodeURIComponent(payment.id)}/receipt`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-2 inline-flex text-sm font-semibold underline underline-offset-4"
+                    >
+                      View private receipt
+                    </a>
+                  ) : (
+                    <p className="mt-2 text-sm text-amber-700">No receipt attached to this legacy payment.</p>
+                  )}
                   <p className="mt-1 text-xs text-muted-foreground">Submitted {new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(payment.created_at))}</p>
                 </div>
                 <div className="flex shrink-0 gap-2">

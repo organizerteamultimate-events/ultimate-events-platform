@@ -38,6 +38,25 @@ export function validateLoginForm(email: string, password: string) {
   return errors
 }
 
+export function getSafeInternalDestination(
+  destination: string | null,
+  origin: string,
+  fallback = '/dashboard',
+) {
+  if (!destination || !destination.startsWith('/') || destination.startsWith('//') || destination.includes('\\')) {
+    return fallback
+  }
+
+  try {
+    const base = new URL(origin)
+    const target = new URL(destination, base)
+    if (target.origin !== base.origin) return fallback
+    return `${target.pathname}${target.search}${target.hash}`
+  } catch {
+    return fallback
+  }
+}
+
 export function validateSignUp(values: SignUpValues): SignUpErrors {
   const errors: SignUpErrors = {}
   if (values.fullName.trim().length < 2) errors.fullName = 'Enter your full name.'
@@ -52,6 +71,35 @@ export function validateSignUp(values: SignUpValues): SignUpErrors {
 
 export function hasAdminAccess(profileRole: string | null | undefined) {
   return profileRole === 'admin'
+}
+
+export function isActiveAccountStatus(status: unknown): status is 'active' {
+  return status === 'active'
+}
+
+export function isProvisionedProfile(
+  profile: { id: string; email: string } | null,
+  userId: string,
+  email: string,
+) {
+  return profile?.id === userId && normalizeEmail(profile.email) === normalizeEmail(email)
+}
+
+export function getSignUpErrorMessage(error: { message: string; code?: string }) {
+  if (
+    error.code === 'user_already_exists' ||
+    error.code === 'email_exists' ||
+    /already (?:registered|exists)/i.test(error.message)
+  ) {
+    return 'An account with this email already exists. Try logging in or resetting your password.'
+  }
+  return error.message
+}
+
+export function logAuthDiagnostic(operation: string, error: unknown) {
+  if (process.env.NODE_ENV !== 'development') return
+  const errorType = error instanceof Error ? error.name : 'Unknown error'
+  console.warn(`[auth] ${operation} failed (${errorType})`)
 }
 
 export function getSiteUrl() {

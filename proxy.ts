@@ -35,7 +35,7 @@ export async function proxy(request: NextRequest) {
 
   if (path.startsWith('/dashboard') && (error || !data.user)) {
     const loginUrl = new URL('/login', request.url)
-    loginUrl.searchParams.set('next', path)
+    loginUrl.searchParams.set('next', `${path}${request.nextUrl.search}`)
     return NextResponse.redirect(loginUrl)
   }
 
@@ -44,34 +44,6 @@ export async function proxy(request: NextRequest) {
       return NextResponse.redirect(new URL('/admin/login', request.url))
     }
 
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('role, account_status')
-      .eq('id', data.user.id)
-      .maybeSingle()
-
-    if (profileError || profile?.account_status !== 'active') {
-      return NextResponse.redirect(new URL('/login?error=account-unavailable', request.url))
-    }
-
-    if (profile.role !== 'admin') {
-      return NextResponse.redirect(new URL('/admin/login?error=unauthorized', request.url))
-    }
-  }
-
-  if (path.startsWith('/dashboard')) {
-    if (error || !data.user) {
-      return NextResponse.redirect(new URL('/login', request.url))
-    }
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('account_status')
-      .eq('id', data.user.id)
-      .maybeSingle()
-
-    if (profileError || profile?.account_status !== 'active') {
-      return NextResponse.redirect(new URL('/login?error=account-unavailable', request.url))
-    }
   }
 
   return response

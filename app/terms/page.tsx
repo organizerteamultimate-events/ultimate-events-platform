@@ -10,7 +10,7 @@ export default function TermsPage() {
       intro="The rules for using ULTIMATE EVENTS."
       sections={[
         { heading: 'Accounts', body: 'Provide accurate information and keep your password confidential. Each person may hold one account and one permanent participant ID.' },
-        { heading: 'Registrations and payments', body: 'Paid registrations are confirmed only after the payment provider verifies the transaction. Refunds follow the policy stated on each event.' },
+        { heading: 'Registrations and payments', body: 'Paid registrations remain pending until an authorized administrator reviews and verifies the submitted UPI transaction reference. A receipt image alone does not prove or automatically complete a payment. Refunds follow the policy stated on each event.' },
         { heading: 'Competitions', body: 'Submissions must be your own work. Plagiarism, collusion, or attempts to interfere with judging may lead to disqualification.' },
         { heading: 'Certificates', body: 'Certificates are issued only to participants who meet the published eligibility rules and may be revoked if obtained improperly.' },
       ]}

@@ -15,6 +15,7 @@ import { EmptyState } from '@/components/site/blocks'
 import { PanelAccessNotice, PanelPageHeading } from '@/components/dashboard/panel-shell'
 import { ProfileEditor } from '@/components/dashboard/profile-editor'
 import { createSupabaseServerClient } from '@/lib/supabase/server'
+import { requireParticipantAccess } from '@/lib/supabase/access'
 import { ParticipantSubmissionManager, type ParticipantCompetitionRecord } from '@/components/dashboard/participant-submission-manager'
 import { ParticipantNotifications, type ParticipantNotification } from '@/components/dashboard/participant-notifications'
 
@@ -24,7 +25,7 @@ const sections = {
     title: 'My profile',
     description: 'Review your personal details and permanent participant ID.',
     emptyTitle: 'Your profile is not connected',
-    emptyDescription: 'Profile details and participant IDs will appear here after account and database services are configured.',
+    emptyDescription: 'Your profile could not be loaded. Reload the page or contact support if the problem continues.',
     icon: UserRound,
   },
   events: {
@@ -32,7 +33,7 @@ const sections = {
     title: 'My events',
     description: 'See the events you have joined and what is coming up.',
     emptyTitle: 'No event activity to display',
-    emptyDescription: 'Your event registrations and schedules will appear here after the account and event services are connected.',
+    emptyDescription: 'Your published event registrations will appear here after you join an event.',
     icon: CalendarDays,
   },
   workshops: {
@@ -40,7 +41,7 @@ const sections = {
     title: 'My workshops',
     description: 'Keep track of your workshop registrations and attendance.',
     emptyTitle: 'No workshop activity to display',
-    emptyDescription: 'Registered workshops and participation information will appear here when real account data is available.',
+    emptyDescription: 'Your workshop registrations will appear here after you join a published workshop.',
     icon: BookOpen,
   },
   registrations: {
@@ -48,15 +49,15 @@ const sections = {
     title: 'My registrations',
     description: 'Review registration IDs, dates, amounts, and confirmation status.',
     emptyTitle: 'No registrations to display',
-    emptyDescription: 'Registration records will appear here after the registration service is connected. No sample records are shown.',
+    emptyDescription: 'Your event and workshop registrations will appear here after you register.',
     icon: ClipboardList,
   },
   payments: {
     eyebrow: 'Records',
     title: 'Payment history',
-    description: 'Review payment attempts and verified transaction statuses.',
+    description: 'Review your manual UPI payment references and verification status.',
     emptyTitle: 'No payment history to display',
-    emptyDescription: 'Verified payment records will appear here after a payment provider and database are configured.',
+    emptyDescription: 'Payment submissions will appear here after you register for a paid event and submit a receipt.',
     icon: CreditCard,
   },
   competitions: {
@@ -64,7 +65,7 @@ const sections = {
     title: 'My competitions',
     description: 'See competition registrations, schedules, and participation details.',
     emptyTitle: 'No competitions to display',
-    emptyDescription: 'Your competition activity will appear when competition records and account services are connected.',
+    emptyDescription: 'Your competition registrations will appear here after you join a published competition.',
     icon: Activity,
   },
   results: {
@@ -88,7 +89,7 @@ const sections = {
     title: 'Notifications',
     description: 'Stay up to date with registration, event, result, and certificate updates.',
     emptyTitle: 'No notifications to display',
-    emptyDescription: 'Notifications will appear here after persistent notification storage is configured.',
+    emptyDescription: 'You do not have any stored notifications yet.',
     icon: Bell,
   },
   support: {
@@ -117,6 +118,8 @@ export default async function DashboardSectionPage({
 }: {
   params: Promise<{ section: string }>
 }) {
+  await requireParticipantAccess()
+
   const { section } = await params
   if (!(section in sections)) notFound()
   const details = sections[section as SectionKey]
@@ -337,7 +340,7 @@ export default async function DashboardSectionPage({
                         <p className="mt-1 break-all text-sm text-muted-foreground">UPI reference: {payment.utr ?? 'Not recorded'}</p>
                       </div>
                       <span className="rounded-full bg-accent px-3 py-1 text-xs font-semibold capitalize">
-                        {payment.status ?? 'Legacy record — not linked to a registration'}
+                        {payment.status === 'pending' ? 'Pending Verification' : payment.status === 'verified' ? 'Verified' : payment.status === 'rejected' ? 'Rejected' : 'Legacy record — not linked to a registration'}
                       </span>
                     </div>
                     {payment.rejection_reason && (
@@ -393,7 +396,7 @@ export default async function DashboardSectionPage({
                     <span className="rounded-full bg-accent px-3 py-1 text-xs font-semibold capitalize">{registration.status}</span>
                   </div>
                   <p className="mt-3 text-sm text-muted-foreground">
-                    Payment: {registration.payment_status.replace('_', ' ')} · {Number(registration.amount) === 0 ? 'Free' : `₹${Number(registration.amount).toFixed(2)}`}
+                    Payment: {registration.payment_status === 'pending' ? 'Pending Verification' : registration.payment_status === 'verified' ? 'Verified' : registration.payment_status === 'rejected' ? 'Rejected' : registration.payment_status.replace('_', ' ')} · {Number(registration.amount) === 0 ? 'Free' : `₹${Number(registration.amount).toFixed(2)}`}
                     {event?.event_date ? ` · ${new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium' }).format(new Date(event.event_date))}` : ''}
                   </p>
                 </li>

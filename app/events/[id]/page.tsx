@@ -47,29 +47,36 @@ export default async function EventDetailsPage({
   const { data: authData } = await supabase.auth.getUser()
   const { data: paymentSettings, error: paymentSettingsError } = await supabase
     .from('platform_settings')
-    .select('upi_id, payment_instructions')
+    .select('upi_id, account_holder_name, qr_image_path, payment_instructions')
     .eq('id', true)
     .maybeSingle()
-  let registration: { id: string; status: string; payment_status: string } | null = null
-  let hasPendingPayment = false
+  let registration: { id: string; status: string; payment_status: string; amount: number } | null = null
+  let payment: { status: string; rejection_reason: string | null } | null = null
+  let registrationError: string | null = null
   if (authData.user) {
-    const { data: existing } = await supabase
+    const { data: existing, error: existingError } = await supabase
       .from('registrations')
-      .select('id, status, payment_status')
+      .select('id, status, payment_status, amount')
       .eq('event_id', id)
       .eq('user_id', authData.user.id)
       .maybeSingle()
     registration = existing
-    if (existing) {
-      const { data: payment } = await supabase
+    if (existingError) registrationError = existingError.message
+    if (existing && !existingError) {
+      const { data: existingPayment, error: existingPaymentError } = await supabase
         .from('payments')
-        .select('id')
+        .select('status, rejection_reason')
         .eq('registration_id', existing.id)
-        .eq('status', 'pending')
+        .order('created_at', { ascending: false })
+        .limit(1)
         .maybeSingle()
-      hasPendingPayment = Boolean(payment)
+      if (existingPaymentError) registrationError = existingPaymentError.message
+      else payment = existingPayment
     }
   }
+  const qrImageUrl = paymentSettings?.qr_image_path
+    ? supabase.storage.from('ultimate-event-payment-qr').getPublicUrl(paymentSettings.qr_image_path).data.publicUrl
+    : null
 
   return (
     <>
@@ -117,11 +124,17 @@ export default async function EventDetailsPage({
           eventTitle={event.title}
           price={Number(event.price)}
           registration={registration}
-          hasPendingPayment={hasPendingPayment}
+          payment={payment}
           authenticated={Boolean(authData.user)}
           upiId={paymentSettings?.upi_id ?? null}
+          accountHolderName={paymentSettings?.account_holder_name ?? null}
+          qrImageUrl={qrImageUrl}
           paymentInstructions={paymentSettings?.payment_instructions ?? ''}
-          paymentSettingsError={paymentSettingsError ? 'The payment settings migration has not been applied or settings could not be loaded.' : null}
+          paymentSettingsError={paymentSettingsError
+            ? 'Payment settings could not be loaded. The organizer should check the Supabase payment workflow migration.'
+            : registrationError
+              ? 'Your existing registration or payment status could not be loaded. Reload the page or contact support.'
+              : null}
         />
       </div>
     </>

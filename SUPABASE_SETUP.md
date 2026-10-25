@@ -15,11 +15,22 @@ Copy `.env.example` to `.env.local` and set:
   links; in local development this is typically `http://localhost:3000`.
 - `EMAIL_FROM`: verified sender address used by the configured email provider.
 
-The app performs privileged actions with the signed-in administrator's Supabase
-session and database-checked RPCs; it does not need a service-role key. Do not
-add one to client or deployment variables for this app.
+Most privileged actions use the signed-in administrator's Supabase session and
+database-checked RPCs. Private receipt submission requires
+`SUPABASE_SERVICE_ROLE_KEY` on the server so participants cannot bypass image
+signature validation or call the payment-submission RPC directly. Configure it
+only in local `.env.local` and Vercel server environment settings. Never expose
+it with a `NEXT_PUBLIC_` prefix, commit it, or import the admin client in a
+client component.
 
 Restart the Next.js development server after changing environment variables.
+
+On Next.js 16, the root `proxy.ts` refreshes and checks the Supabase Auth
+session for protected navigation. Dashboard pages re-check the current user
+and active profile on the server; admin pages additionally check the profile
+role. Admin API handlers and database RPCs perform their own authorization
+checks. Keep these data-bound checks even though Proxy redirects logged-out
+requests.
 
 ## 2. Reconcile and apply the current database schema
 
@@ -119,13 +130,18 @@ For a fresh database, apply the migrations in order:
 3. `202610180001_reconcile_legacy_event_schema.sql`
 4. `202610200001_participant_workflows.sql`
 5. `202610200002_event_registration_and_payment_review.sql`
+6. `202610220001_auth_profile_status_repair.sql`
+7. `202610220002_event_payment_receipts.sql`
 
 The events migration now explicitly creates the legacy-compatible
-`payments.payment_status` field used by the reconciliation and review
-procedures. For an existing project, do not assume migration history or schema
-matches this sequence: inspect Supabase migration history and run the preflight
-queries before applying anything. These migrations have not been applied to
-the linked project from this workspace.
+`payments.payment_status` field and nullable `payments.event_id` field needed
+by the reconciliation and review procedures. The nullable event link preserves
+legacy payments when their original event association is unavailable; new
+workflow payments are linked by the server-side RPC. For an existing project,
+do not assume migration history or schema matches this sequence: inspect
+Supabase migration history and run the preflight queries before applying
+anything. These migrations have not been applied to the linked project from
+this workspace.
 
 Read-only preflight (run before the migration). First verify which tables
 actually exist and inspect every existing column/type:
@@ -329,17 +345,90 @@ order by table_name, column_name;
 
 select p.proname, pg_get_function_identity_arguments(p.oid) as arguments,
        has_function_privilege('anon', p.oid, 'EXECUTE') as anon_can_execute,
-       has_function_privilege('authenticated', p.oid, 'EXECUTE') as authenticated_can_execute
+       has_function_privilege('authenticated', p.oid, 'EXECUTE') as authenticated_can_execute,
+       has_function_privilege('service_role', p.oid, 'EXECUTE') as service_role_can_execute
 from pg_proc p
 join pg_namespace n on n.oid = p.pronamespace
 where n.nspname = 'public'
-  and p.proname in ('register_for_event', 'submit_upi_payment', 'review_upi_payment', 'review_upi_payments')
+  and p.proname in (
+    'register_for_event', 'submit_upi_payment', 'submit_upi_payment_for_user',
+    'review_upi_payment', 'review_upi_payments'
+  )
 order by p.proname, arguments;
 ```
 
+### Repairing account status and profile provisioning
+
+The application requires `profiles.account_status` with the values `active`,
+`suspended`, and `deleted`. The additive
+`202610220001_auth_profile_status_repair.sql` migration is a compatibility
+repair for a database where the expected `profiles` base columns already exist
+but account status or the auth-user profile trigger is missing/incomplete. It
+adds `active` as the default status and `user` as the default role for new
+profiles, preserves existing non-null statuses, roles, and participant IDs,
+and backfills null statuses to `active`. It synchronizes the participant-ID
+sequence with existing IDs before provisioning profiles, restores the
+`auth.users` profile trigger, and creates profiles only for auth users who do
+not already have one. The trigger preserves the profile's role and participant
+data when an existing auth user's email changes. The database admin check also
+requires an active account, so suspending an admin blocks their database-level
+admin RPC access as well as protected pages. It does not replace the
+reconciliation or participant-workflow migrations.
+
+Before applying it, back up the database and verify the existing profile
+columns, constraints, and policies with the preflight queries above. If the
+`profiles` base schema or other application migrations are missing, apply only
+the missing migrations in their documented order after their respective
+preflight checks; do not use this repair as a substitute for them. Run the
+repair in Supabase Dashboard → SQL Editor as the project owner. The migration
+is transactional and aborts rather than changing an incompatible profile
+schema or resolving duplicate email conflicts by overwriting profile rows.
+It does not disable RLS, change profile policies, reset data, or assign admin
+roles.
+
+Afterward, confirm `profiles.account_status` exists with default `active`, the
+three allowed status values are constrained, RLS is enabled, and the
+`on_auth_user_profile_created` trigger exists. Test signup with a new address,
+email confirmation, active-account login, and a suspended test account before
+deploying the app. Deployment does not apply database migrations; deploy the
+code to the existing Vercel project only after the database change succeeds.
+
+### Manual UPI receipts and payment QR migration
+
+After the profile, reconciliation, participant workflow, registration/payment
+review, and account-status repair migrations are present and verified, inspect
+the new migration `202610220002_event_payment_receipts.sql`. It adds the admin
+account-holder and QR settings, receipt object path, a public QR-only storage
+bucket, a private receipt bucket, object-level RLS policies, and database RPCs
+that accept only server-validated uploads and the authenticated participant's
+registration amount and receipt path. It updates event publication visibility, preserves existing
+registration uniqueness, and keeps payment state changes inside admin-checked
+RPCs. Legacy payment history remains readable; unlinked legacy rows are not
+reviewable because they have no verified registration link. New submissions
+require a private receipt image.
+
+Before applying, back up the database and check for duplicate case-insensitive
+UTRs, the unique `(registrations.event_id, registrations.user_id)` constraint,
+the unique pending-payment-per-registration and case-insensitive UTR indexes,
+bucket ID conflicts, and the prerequisite columns/functions. Run the SQL as the
+project owner in Supabase Dashboard → SQL Editor only after review.
+Check its complete result; it is transaction wrapped and deliberately aborts
+on missing prerequisites or incompatible pre-existing storage buckets. Do not
+apply it from the CLI or run `supabase db push` without explicit approval.
+
+After applying, set `SUPABASE_SERVICE_ROLE_KEY` as a server-only environment
+variable locally and in the existing Vercel project. Verify that
+`ultimate-event-payment-receipts` is private, the QR bucket contains only
+public payment QR assets, the storage policies are present, and `payments` RLS
+is enabled. In a staging project, submit a receipt,
+confirm a participant cannot read another user's object, confirm an admin can
+view it through the authenticated receipt route, reject and approve payments,
+and verify registration state changes only after admin approval.
+
 Expected: all four core tables report `relrowsecurity = true`; the expected
-columns above exist; registration and payment submissions are executable by
-`authenticated` but not `anon`; payment-review RPCs use
+columns above exist; registration is executable by `authenticated` but not
+`anon`; the receipt submission RPC is executable only by `service_role`;
+payment-review RPCs use
 `(uuid, boolean, text)` and `(uuid[], boolean, text)` and are not executable
 by `anon`. Stop if any result differs. Confirm RLS policies and constraints
 against the migration definitions before testing with dedicated accounts.
@@ -377,9 +466,10 @@ stored role on the server and in middleware.
 ## UPI payment configuration
 
 This project currently uses **manual UPI verification**, not a payment gateway.
-After the reconciliation, participant-workflows, and payment-review migrations
-are applied and the first admin has been bootstrapped, set the business UPI ID
-and participant-facing instructions in **Admin → Settings**.
+After migrations through `202610220002_event_payment_receipts.sql` are applied
+and the first admin has been bootstrapped, set the business UPI ID,
+account-holder name, QR image, and participant-facing instructions in
+**Admin → Settings**.
 These values are stored in the existing Supabase project, not in a public
 environment variable. Participants launch their UPI app (where supported),
 transfer the displayed amount, and submit the transaction reference. The
@@ -460,9 +550,10 @@ generated.
 
 The existing Vercel project metadata is present in the local workspace and no
 `vercel.json` override is required. Keep the existing Vercel project; configure
-the public Supabase URL/key, `NEXT_PUBLIC_SITE_URL`, and server-side SMTP values
-in that project's environment settings. Never add the Supabase service-role key
-to `NEXT_PUBLIC_*` variables. `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`,
+the public Supabase URL/key, `NEXT_PUBLIC_SITE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`, and server-side SMTP values in that project's
+environment settings. Never add the Supabase service-role key to `NEXT_PUBLIC_*`
+variables. `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`,
 `SMTP_APP_PASSWORD`, and `EMAIL_FROM` are used by server-side mail. The app
 reports SMTP acceptance only; SMTP acceptance does not confirm inbox delivery.
 Supabase Auth SMTP is configured separately in the Supabase dashboard.

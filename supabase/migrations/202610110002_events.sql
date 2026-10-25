@@ -82,6 +82,7 @@ create index if not exists registrations_event_status_idx
 
 create table if not exists public.payments (
   id uuid primary key default gen_random_uuid(),
+  event_id uuid references public.events (id),
   registration_id uuid not null references public.registrations (id),
   user_id uuid not null references auth.users (id) on delete cascade,
   amount numeric(10, 2) not null check (amount > 0),
@@ -95,6 +96,7 @@ create table if not exists public.payments (
 -- Preserve legacy payment rows while adding fields required by manual review.
 -- Existing rows stay unlinked with a null status; new rows default to pending.
 alter table public.payments
+  add column if not exists event_id uuid references public.events (id),
   add column if not exists registration_id uuid references public.registrations (id),
   add column if not exists utr text,
   add column if not exists payment_status text,

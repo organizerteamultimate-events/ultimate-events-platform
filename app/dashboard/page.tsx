@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { PanelAccessNotice, PanelPageHeading, PanelStat } from '@/components/dashboard/panel-shell'
 import { createSupabaseServerClient } from '@/lib/supabase/server'
+import { requireParticipantAccess } from '@/lib/supabase/access'
 import { isSupabaseConfigured } from '@/lib/supabase/config'
 
 const shortcuts = [
@@ -27,6 +28,8 @@ const activity = [
 ]
 
 export default async function DashboardPage() {
+  await requireParticipantAccess()
+
   let profile: { full_name: string; participant_id: string } | null = null
   let profileError: string | null = null
   let metrics = {
@@ -99,7 +102,7 @@ export default async function DashboardPage() {
           <p className="mt-2 max-w-xl text-sm leading-relaxed text-ink-foreground/65">
             {profile
               ? 'This permanent ID is linked to your account and used for event registrations and certificates.'
-              : 'A unique ID will be created and saved to your account after database and authentication services are configured.'}
+              : 'Your participant ID could not be loaded. Reload this page or contact support if the problem continues.'}
           </p>
         </div>
         {!profile && (
@@ -145,7 +148,7 @@ export default async function DashboardPage() {
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">Your account</p>
           <h2 id="activity-heading" className="mt-1 text-xl font-bold">Activity & records</h2>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            Once connected, your records will be available here and remain linked to your account.
+            Your registrations, payment reviews, and certificates are loaded from your account records.
           </p>
           <ul className="mt-5 divide-y">
             {activity.map(({ label, href, icon: Icon }) => (

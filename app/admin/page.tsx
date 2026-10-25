@@ -12,6 +12,7 @@ import {
 import { PanelAccessNotice, PanelPageHeading, PanelStat } from '@/components/dashboard/panel-shell'
 import { EmptyState } from '@/components/site/blocks'
 import { createSupabaseServerClient } from '@/lib/supabase/server'
+import { requireAdminAccess } from '@/lib/supabase/access'
 
 const managementLinks = [
   { label: 'Manage events & workshops', href: '/admin/events', icon: CalendarDays },
@@ -25,6 +26,8 @@ const managementLinks = [
 ]
 
 export default async function AdminDashboardPage() {
+  await requireAdminAccess()
+
   const supabase = await createSupabaseServerClient()
   let metrics = { users: null as number | null, events: null as number | null, registrations: null as number | null, payments: null as number | null }
   let recent: Array<{ id: string; event_title: string; participant_name: string; status: string; created_at: string }> = []

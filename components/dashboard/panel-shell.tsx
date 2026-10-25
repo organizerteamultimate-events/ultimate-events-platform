@@ -80,6 +80,7 @@ export function PanelShell({
   const pathname = usePathname()
   const router = useRouter()
   const [signOutError, setSignOutError] = useState<string | null>(null)
+  const [signingOut, setSigningOut] = useState(false)
   const isAdmin = kind === 'admin'
   const supabaseConfigured = isSupabaseConfigured()
   const links = isAdmin ? adminLinks : userLinks
@@ -87,17 +88,26 @@ export function PanelShell({
   const currentLink = links.find(({ href }) => href === pathname)
 
   async function signOut() {
+    setSignOutError(null)
     const supabase = createSupabaseBrowserClient()
     if (!supabase) {
       setSignOutError('Supabase is not configured, so there is no active session to sign out.')
       return
     }
-    const { error } = await supabase.auth.signOut()
-    if (error) {
-      setSignOutError(`Could not sign out: ${error.message}`)
-      return
+    setSigningOut(true)
+    try {
+      const { error } = await supabase.auth.signOut()
+      if (error) {
+        setSignOutError(`Could not sign out: ${error.message}`)
+        return
+      }
+      router.replace(isAdmin ? '/admin/login' : '/login')
+      router.refresh()
+    } catch (error) {
+      setSignOutError(`Could not sign out: ${error instanceof Error ? error.message : 'Unexpected connection error.'}`)
+    } finally {
+      setSigningOut(false)
     }
-    router.replace(isAdmin ? '/admin/login' : '/login')
   }
 
   const linkList = (mobile = false) => (
@@ -144,10 +154,11 @@ export function PanelShell({
             <button
               type="button"
               onClick={signOut}
+              disabled={signingOut}
               className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-ink-foreground/70 transition-colors hover:bg-white/10 hover:text-ink-foreground"
             >
               <LogOut className="size-4" aria-hidden="true" />
-              Sign out
+              {signingOut ? 'Signing out…' : 'Sign out'}
             </button>
           ) : (
             <Link
@@ -210,6 +221,16 @@ export function PanelShell({
                 </option>
               ))}
             </select>
+            {supabaseConfigured && (
+              <button
+                type="button"
+                onClick={signOut}
+                disabled={signingOut}
+                className="shrink-0 rounded-lg border px-3 py-2.5 text-sm font-medium disabled:opacity-60"
+              >
+                {signingOut ? 'Signing out…' : 'Sign out'}
+              </button>
+            )}
             <Link
               href="/"
               className="shrink-0 text-sm font-medium text-muted-foreground hover:text-foreground"

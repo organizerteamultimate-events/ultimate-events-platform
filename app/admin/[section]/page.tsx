@@ -18,6 +18,7 @@ import {
 import { PanelAccessNotice, PanelPageHeading } from '@/components/dashboard/panel-shell'
 import { EmptyState } from '@/components/site/blocks'
 import { createSupabaseServerClient } from '@/lib/supabase/server'
+import { requireAdminAccess } from '@/lib/supabase/access'
 import type { EventRecord } from '@/lib/events'
 import { AdminEventManager } from '@/components/dashboard/admin-event-manager'
 import { AdminPaymentReview, type AdminPaymentRecord } from '@/components/dashboard/admin-payment-review'
@@ -32,36 +33,36 @@ const sections = {
   users: {
     title: 'Users',
     description: 'Search participant accounts, review verification status, and inspect registration history.',
-    empty: 'User records are not connected',
-    detail: 'User search and account management require the configured database and server-side admin authorization.',
+    empty: 'No participant records found',
+    detail: 'Search participant accounts and manage account access.',
     icon: Users,
   },
   events: {
     title: 'Events & workshops',
     description: 'Create, edit, publish, cancel, and archive events and workshops.',
     empty: 'No event records',
-    detail: 'Event management will be available after the event database and protected admin APIs are configured.',
+    detail: 'Create and publish events using the connected event database.',
     icon: CalendarDays,
   },
   registrations: {
     title: 'Registrations',
     description: 'Review event registrations, capacity, eligibility, and confirmation status.',
     empty: 'No registration records',
-    detail: 'Registration records and exports will appear when persistent registration services are available.',
+    detail: 'Review registrations and confirmation status from the connected database.',
     icon: ClipboardList,
   },
   payments: {
     title: 'Payments',
-    description: 'Review payment attempts and provider-verified transactions.',
+    description: 'Review manual UPI payment references and verify submitted receipts.',
     empty: 'No payment records',
-    detail: 'Payment management requires a configured payment provider, webhook verification, and database.',
+    detail: 'Paid registrations remain unconfirmed until an administrator verifies the submitted UPI payment.',
     icon: CreditCard,
   },
   competitions: {
     title: 'Competitions',
     description: 'Configure competition schedules, problem statements, and judging settings.',
-    empty: 'No competition records',
-    detail: 'Competition data will appear after the database and competition services are connected.',
+    empty: 'Competition settings are not available',
+    detail: 'Competition-specific schedules and judging settings are not implemented in the current database schema.',
     icon: Trophy,
   },
   submissions: {
@@ -140,6 +141,8 @@ export default async function AdminSectionPage({
   params: Promise<{ section: string }>
   searchParams: Promise<{ q?: string }>
 }) {
+  await requireAdminAccess()
+
   const [{ section }, query] = await Promise.all([params, searchParams])
   if (!(section in sections)) notFound()
   const details = sections[section as SectionKey]
@@ -194,7 +197,7 @@ export default async function AdminSectionPage({
     const { data: paymentData, error: paymentError } = supabase
       ? await supabase
           .from('payments')
-          .select('id, registration_id, user_id, amount, utr, created_at')
+          .select('id, registration_id, user_id, amount, utr, receipt_path, created_at')
           .eq('status', 'pending')
           .order('created_at', { ascending: true })
       : { data: null, error: new Error('Supabase is not configured.') }
@@ -294,7 +297,7 @@ export default async function AdminSectionPage({
       const { data, error } = supabase
         ? await supabase
             .from('platform_settings')
-            .select('upi_id, payment_instructions')
+            .select('upi_id, account_holder_name, qr_image_path, payment_instructions')
             .eq('id', true)
             .maybeSingle()
         : { data: null, error: new Error('Supabase is not configured.') }
@@ -305,6 +308,8 @@ export default async function AdminSectionPage({
           <PanelAccessNotice admin />
           <AdminPaymentSettings
             initialUpiId={data?.upi_id ?? ''}
+            initialAccountHolderName={data?.account_holder_name ?? ''}
+            initialQrImagePath={data?.qr_image_path ?? null}
             initialInstructions={data?.payment_instructions ?? ''}
             loadError={error ? 'Payment settings could not be loaded. Apply the participant workflows migration and verify admin access.' : null}
           />

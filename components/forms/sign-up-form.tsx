@@ -4,7 +4,17 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import { Field, FormResult, SubmitButton, describedBy, inputClass } from './field'
-import { buildAbsoluteUrl, normalizeEmail, normalizeMobile, validateSignUp, type SignUpErrors, type SignUpValues } from '@/lib/auth'
+import {
+  buildAbsoluteUrl,
+  getSignUpErrorMessage,
+  isProvisionedProfile,
+  logAuthDiagnostic,
+  normalizeEmail,
+  normalizeMobile,
+  validateSignUp,
+  type SignUpErrors,
+  type SignUpValues,
+} from '@/lib/auth'
 import { createSupabaseBrowserClient } from '@/lib/supabase/client'
 
 type Values = SignUpValues
@@ -42,14 +52,14 @@ export function SignUpForm() {
     setErrors(found)
     if (Object.keys(found).length > 0) return
 
-    const supabase = createSupabaseBrowserClient()
-    if (!supabase) {
-      setResult('Account creation is not available yet. Add the Supabase project URL and publishable key, then try again.')
-      return
-    }
-
     setPending(true)
     try {
+      const supabase = createSupabaseBrowserClient()
+      if (!supabase) {
+        setResult('Account creation is not available yet. Check the Supabase project URL and publishable key configuration, then try again.')
+        return
+      }
+
       const { data, error } = await supabase.auth.signUp({
         email: normalizeEmail(values.email),
         password: values.password,
@@ -65,17 +75,42 @@ export function SignUpForm() {
       })
 
       if (error) {
-        setResult(`Account was not created: ${error.message}`)
+        logAuthDiagnostic('Sign-up', error)
+        setResult(`Account was not created: ${getSignUpErrorMessage(error)}`)
         return
       }
 
-      if (data.session) {
-        router.push('/dashboard')
+      if (data.session && data.user) {
+        const { data: profile, error: profileError } = await supabase
+          .from('profiles')
+          .select('id, email')
+          .eq('id', data.user.id)
+          .maybeSingle()
+
+        if (profileError || !isProvisionedProfile(profile, data.user.id, data.user.email ?? values.email)) {
+          if (profileError) logAuthDiagnostic('Profile verification after sign-up', profileError)
+          const { error: signOutError } = await supabase.auth.signOut()
+          if (signOutError) logAuthDiagnostic('Sign-out after profile verification failure', signOutError)
+          setResult(
+            signOutError
+              ? `Your account was created, but its participant profile could not be verified and sign-out failed: ${signOutError.message}`
+              : profileError
+                ? `Your account was created, but its participant profile could not be verified: ${profileError.message}`
+                : 'Your account was created, but its participant profile is missing or does not match your email. Contact support before signing in.',
+          )
+          return
+        }
+
+        router.replace('/dashboard')
+        router.refresh()
         return
       }
-      setResult('Account created. Check your email to verify your address, then sign in.')
+      setResult(
+        'If email confirmation is enabled, check your inbox to verify your address. If you already have an account, try logging in or resetting your password.',
+      )
     } catch (error) {
-      setResult(`Account was not created: ${error instanceof Error ? error.message : 'Unexpected connection error.'}`)
+      logAuthDiagnostic('Sign-up', error)
+      setResult(`Account creation could not be confirmed: ${error instanceof Error ? error.message : 'Unexpected connection error.'}`)
     } finally {
       setPending(false)
     }

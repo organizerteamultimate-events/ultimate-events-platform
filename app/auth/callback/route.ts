@@ -1,10 +1,13 @@
 import { NextResponse, type NextRequest } from 'next/server'
+import { getSafeInternalDestination } from '@/lib/auth'
 import { createSupabaseServerClient } from '@/lib/supabase/server'
 
 export async function GET(request: NextRequest) {
   const code = request.nextUrl.searchParams.get('code')
-  const next = request.nextUrl.searchParams.get('next')
-  const destination = next?.startsWith('/') && !next.startsWith('//') ? next : '/dashboard'
+  const destination = getSafeInternalDestination(
+    request.nextUrl.searchParams.get('next'),
+    request.nextUrl.origin,
+  )
   const supabase = await createSupabaseServerClient()
 
   if (!supabase || !code) {
