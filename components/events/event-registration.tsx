@@ -101,7 +101,7 @@ export function EventRegistration({
         const response = await fetch('/api/notifications/registration', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ registrationId: data }),
+          body: JSON.stringify({ registrationId: savedRegistration.id }),
         })
         if (!response.ok) {
           const result = await response.json() as { error?: string }

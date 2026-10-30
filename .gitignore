@@ -20,3 +20,6 @@ tsconfig.tsbuildinfo
 
 
 supabase/.temp/
+
+# TypeScript build cache
+*.tsbuildinfo
