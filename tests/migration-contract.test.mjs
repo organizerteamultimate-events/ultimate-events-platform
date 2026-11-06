@@ -13,6 +13,7 @@ const authProfileRepair = readMigration('202610220001_auth_profile_status_repair
 const eventPaymentReceipts = readMigration('202610220002_event_payment_receipts.sql')
 const certificateVerification = readMigration('202611050001_certificate_verification_status.sql')
 const submissionWindows = readMigration('202611050002_competition_submission_windows.sql')
+const productionReconciliation = readMigration('202611060001_production_schema_reconciliation.sql')
 
 function functionBody(sql, name) {
   const declaration = new RegExp(
@@ -25,6 +26,15 @@ function functionBody(sql, name) {
   const bodyEnd = sql.indexOf('$$;', bodyStart)
   assert.notEqual(bodyEnd, -1, `Expected public.${name} body to close`)
   return sql.slice(bodyStart, bodyEnd)
+}
+
+function functionParameterNames(sql, name) {
+  const declaration = new RegExp(
+    `create\\s+or\\s+replace\\s+function\\s+public\\.${name}\\s*\\(([\\s\\S]*?)\\)\\s*returns`,
+    'i',
+  ).exec(sql)
+  assert.ok(declaration, `Expected public.${name} to declare its RPC arguments`)
+  return [...declaration[1].matchAll(/\b(p_[a-z0-9_]+)\s+[a-z]/gi)].map((match) => match[1])
 }
 
 test('migration files exist in dependency order and retain the profile/event foundation', () => {
@@ -198,4 +208,81 @@ test('workflow tables keep RLS enabled and migrations do not disable it', () => 
     assert.match(workflows, new RegExp(`alter table public\\.${table} enable row level security`, 'i'))
   }
   assert.doesNotMatch(`${reconciliation}\n${workflows}\n${paymentReview}`, /disable row level security/i)
+})
+
+test('production reconciliation uses safe, additive and idempotent policy creation', () => {
+  assert.match(productionReconciliation, /^\s*begin;/i)
+  assert.match(productionReconciliation, /notify pgrst, 'reload schema';\s*commit;\s*$/i)
+  assert.doesNotMatch(productionReconciliation, /create\s+policy\s+if\s+not\s+exists/i)
+  assert.doesNotMatch(productionReconciliation, /\bdrop\s+(table|function|policy)\b|\btruncate\b/i)
+  assert.match(productionReconciliation, /create policy ue_202611060001_settings_select[\s\S]*on public\.platform_settings for select to anon, authenticated/i)
+  assert.match(productionReconciliation, /settings_select_boundary[\s\S]*as restrictive for select/i)
+  assert.match(productionReconciliation, /submissions_participant_read[\s\S]*user_id = \(select auth\.uid\(\)\) or \(select public\.is_admin\(\)\)/i)
+  assert.match(productionReconciliation, /submissions_participant_read_boundary[\s\S]*as restrictive for select/i)
+  assert.match(productionReconciliation, /submissions_participant_insert_boundary[\s\S]*as restrictive for insert/i)
+  assert.match(productionReconciliation, /submissions_participant_update_boundary[\s\S]*as restrictive for update/i)
+  assert.match(productionReconciliation, /grant select \(id, upi_id, account_holder_name, qr_image_path, payment_instructions\)\s+on public\.platform_settings to anon, authenticated/i)
+  assert.match(productionReconciliation, /setting_column[\s\S]*revoke all privileges \(%I\) on table public\.platform_settings/i)
+  assert.match(productionReconciliation, /create unique index winners_event_place_key/i)
+  assert.match(productionReconciliation, /create unique index certificates_one_active_per_registration_key[\s\S]*where revoked_at is null/i)
+  assert.match(productionReconciliation, /registrations must have a valid, non-partial unique index/i)
+})
+
+test('production reconciliation scopes private storage access and RPC contracts', () => {
+  assert.match(productionReconciliation, /payment_receipt_private_read[\s\S]*bucket_id = 'ultimate-event-payment-receipts'[\s\S]*auth\.uid\(\)/i)
+  assert.match(productionReconciliation, /ue_202611060001_receipt_select_boundary[\s\S]*as restrictive for select[\s\S]*bucket_id <> 'ultimate-event-payment-receipts'/i)
+  assert.match(productionReconciliation, /ue_202611060001_receipt_delete_boundary[\s\S]*not exists[\s\S]*public\.payments p where p\.receipt_path = name/i)
+  assert.match(productionReconciliation, /ue_202611060001_qr_insert_boundary[\s\S]*bucket_id <> 'ultimate-event-payment-qr'[\s\S]*public\.is_admin\(\)/i)
+  assert.match(productionReconciliation, /allowed_mime_types <@ array\['image\/png', 'image\/jpeg', 'image\/webp'\]/i)
+  assert.match(productionReconciliation, /revoke all on sequence public\.certificate_number_sequence from public, anon, authenticated/i)
+  assert.match(productionReconciliation, /public\.register_for_event\(uuid\) is missing/i)
+
+  for (const [name, result] of [
+    ['submit_upi_payment_for_user', 'uuid'],
+    ['review_upi_payment', 'uuid'],
+    ['review_upi_payments', 'integer'],
+    ['update_payment_settings', 'void'],
+    ['admin_search_participants', 'table'],
+    ['manage_participant', 'text'],
+    ['review_competition_submission', 'uuid'],
+    ['manage_event_winner', 'uuid'],
+    ['issue_event_certificates', 'table'],
+    ['revoke_certificate', 'void'],
+    ['verify_certificate', 'table'],
+    ['get_published_winners', 'table'],
+    ['set_notification_read', 'void'],
+  ]) {
+    assert.match(
+      productionReconciliation,
+      new RegExp(`create or replace function public\\.${name}\\s*\\([\\s\\S]*?\\)\\s*returns\\s+${result}\\b`, 'i'),
+      `Expected the exact ${name} RPC contract`,
+    )
+  }
+})
+
+test('production RPC argument names match every application call site', () => {
+  const contracts = [
+    ['submit_upi_payment_for_user', '../app/api/payments/submit/route.ts', ['p_user_id', 'p_registration_id', 'p_utr', 'p_receipt_path']],
+    ['review_upi_payment', '../components/dashboard/admin-payment-review.tsx', ['p_payment_id', 'p_approve', 'p_rejection_reason']],
+    ['review_upi_payments', '../components/dashboard/admin-payment-review.tsx', ['p_payment_ids', 'p_approve', 'p_rejection_reason']],
+    ['update_payment_settings', '../components/dashboard/admin-payment-settings.tsx', ['p_upi_id', 'p_account_holder_name', 'p_qr_image_path', 'p_instructions']],
+    ['admin_search_participants', '../app/admin/[section]/page.tsx', ['p_query', 'p_limit', 'p_offset']],
+    ['manage_participant', '../app/api/admin/participants/route.ts', ['p_user_id', 'p_action', 'p_reason']],
+    ['review_competition_submission', '../components/dashboard/admin-submission-review.tsx', ['p_submission_id', 'p_status', 'p_score', 'p_feedback']],
+    ['manage_event_winner', '../components/dashboard/admin-winner-manager.tsx', ['p_event_id', 'p_user_id', 'p_place', 'p_award_title', 'p_published']],
+    ['issue_event_certificates', '../app/api/admin/certificates/issue/route.ts', ['p_event_id']],
+    ['revoke_certificate', '../app/api/admin/certificates/revoke/route.ts', ['p_certificate_id', 'p_reason']],
+    ['verify_certificate', '../components/forms/simple-forms.tsx', ['p_certificate_number']],
+    ['get_published_winners', '../app/winners/page.tsx', []],
+    ['set_notification_read', '../components/dashboard/participant-notifications.tsx', ['p_notification_id']],
+  ]
+
+  for (const [name, file, expectedArgs] of contracts) {
+    const source = readFileSync(new URL(file, import.meta.url), 'utf8')
+    assert.match(source, new RegExp(`\\.rpc\\(['"]${name}['"]`), `Expected an application call to ${name}`)
+    assert.deepEqual(functionParameterNames(productionReconciliation, name), expectedArgs, `Expected SQL arguments for ${name}`)
+    for (const argument of expectedArgs) {
+      assert.match(source, new RegExp(`\\b${argument}:`), `Expected application argument ${argument} for ${name}`)
+    }
+  }
 })
