@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { inputClass } from '@/components/forms/field'
 import { createSupabaseBrowserClient } from '@/lib/supabase/client'
@@ -9,6 +9,10 @@ export type ParticipantCompetitionRecord = {
   registration_id: string
   event_id: string
   event_title: string
+  submission_opens_at: string | null
+  submission_deadline: string | null
+  allow_late_submissions: boolean
+  late_submission_deadline: string | null
   submission: {
     id: string
     submission_url: string
@@ -18,6 +22,45 @@ export type ParticipantCompetitionRecord = {
     feedback: string
     submitted_at: string
   } | null
+}
+
+function getSubmissionWindowStatus(record: ParticipantCompetitionRecord, now: number) {
+  const opensAt = record.submission_opens_at ? Date.parse(record.submission_opens_at) : NaN
+  const deadline = record.submission_deadline ? Date.parse(record.submission_deadline) : NaN
+  const lateDeadline = record.late_submission_deadline ? Date.parse(record.late_submission_deadline) : NaN
+  const configured = Number.isFinite(opensAt) && Number.isFinite(deadline)
+  const lateOpen = record.allow_late_submissions &&
+    Number.isFinite(lateDeadline) &&
+    now > deadline &&
+    now <= lateDeadline
+  const isOpen = configured && now >= opensAt &&
+    (now <= deadline || lateOpen)
+  const formatDate = (timestamp: number) =>
+    new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium', timeStyle: 'short' }).format(timestamp)
+  const formatRemaining = (timestamp: number) => {
+    const remainingMinutes = Math.max(0, Math.ceil((timestamp - now) / 60_000))
+    const days = Math.floor(remainingMinutes / (60 * 24))
+    const hours = Math.floor((remainingMinutes % (60 * 24)) / 60)
+    const minutes = remainingMinutes % 60
+    return `${days}d ${hours}h ${minutes}m remaining`
+  }
+
+  if (now === 0) return { canSubmit: false, message: 'Checking submission window…' }
+  if (!configured) return { canSubmit: false, message: 'Submission window is not configured.' }
+  if (now < opensAt) return { canSubmit: false, message: `Opens ${formatDate(opensAt)}` }
+  if (lateOpen) {
+    return {
+      canSubmit: true,
+      message: `Late submissions accepted until ${formatDate(lateDeadline)} (${formatRemaining(lateDeadline)})`,
+    }
+  }
+  if (isOpen) {
+    return {
+      canSubmit: true,
+      message: `Open until ${formatDate(deadline)} (${formatRemaining(deadline)})`,
+    }
+  }
+  return { canSubmit: false, message: `Submission window closed. Deadline: ${formatDate(deadline)}` }
 }
 
 export function ParticipantSubmissionManager({
@@ -30,8 +73,16 @@ export function ParticipantSubmissionManager({
   loadError: string | null
 }) {
   const router = useRouter()
+  const [now, setNow] = useState(0)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    const updateTime = () => setNow(Date.now())
+    updateTime()
+    const interval = window.setInterval(updateTime, 30_000)
+    return () => window.clearInterval(interval)
+  }, [])
 
   async function save(record: ParticipantCompetitionRecord, form: HTMLFormElement) {
     const values = new FormData(form)
@@ -86,39 +137,45 @@ export function ParticipantSubmissionManager({
         </div>
       ) : (
         <ul className="grid gap-4">
-          {competitions.map((record) => (
-            <li key={record.registration_id} className="rounded-2xl border bg-card p-5">
-              <h2 className="font-bold">{record.event_title}</h2>
-              {record.submission && (
-                <div className="mt-3 rounded-lg bg-muted/50 p-3 text-sm">
-                  <p>Status: <span className="font-semibold capitalize">{record.submission.status}</span>{record.submission.score !== null ? ` · Score: ${record.submission.score}` : ''}</p>
-                  {record.submission.feedback && <p className="mt-2 whitespace-pre-wrap">{record.submission.feedback}</p>}
-                  {record.submission.submitted_at && <p className="mt-2 text-xs text-muted-foreground">Submitted {new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(record.submission.submitted_at))}</p>}
-                </div>
-              )}
-              {(!record.submission || record.submission.status === 'pending') && (
-                <form
-                  onSubmit={(event) => {
-                    event.preventDefault()
-                    void save(record, event.currentTarget)
-                  }}
-                  className="mt-4 grid gap-3"
-                >
-                  <label className="grid gap-1.5 text-sm font-medium">
-                    Submission URL
-                    <input name="submission_url" type="url" minLength={8} maxLength={2048} defaultValue={record.submission?.submission_url ?? ''} className={inputClass} required placeholder="https://" />
-                  </label>
-                  <label className="grid gap-1.5 text-sm font-medium">
-                    Notes
-                    <textarea name="notes" rows={3} maxLength={10000} defaultValue={record.submission?.notes ?? ''} className={inputClass} />
-                  </label>
-                  <button disabled={busyId !== null} className="h-10 rounded-lg bg-ink px-4 text-sm font-semibold text-ink-foreground disabled:opacity-60">
-                    {busyId === record.registration_id ? 'Saving…' : record.submission ? 'Update submission' : 'Submit work'}
-                  </button>
-                </form>
-              )}
-            </li>
-          ))}
+          {competitions.map((record) => {
+            const window = getSubmissionWindowStatus(record, now)
+            return (
+              <li key={record.registration_id} className="rounded-2xl border bg-card p-5">
+                <h2 className="font-bold">{record.event_title}</h2>
+                <p className="mt-2 text-sm text-muted-foreground" role="status">
+                  {window.message}
+                </p>
+                {record.submission && (
+                  <div className="mt-3 rounded-lg bg-muted/50 p-3 text-sm">
+                    <p>Status: <span className="font-semibold capitalize">{record.submission.status}</span>{record.submission.score !== null ? ` · Score: ${record.submission.score}` : ''}</p>
+                    {record.submission.feedback && <p className="mt-2 whitespace-pre-wrap">{record.submission.feedback}</p>}
+                    {record.submission.submitted_at && <p className="mt-2 text-xs text-muted-foreground">Submitted {new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(record.submission.submitted_at))}</p>}
+                  </div>
+                )}
+                {(!record.submission || record.submission.status === 'pending') && window.canSubmit && (
+                  <form
+                    onSubmit={(event) => {
+                      event.preventDefault()
+                      void save(record, event.currentTarget)
+                    }}
+                    className="mt-4 grid gap-3"
+                  >
+                    <label className="grid gap-1.5 text-sm font-medium">
+                      Submission URL
+                      <input name="submission_url" type="url" minLength={8} maxLength={2048} defaultValue={record.submission?.submission_url ?? ''} className={inputClass} required placeholder="https://" />
+                    </label>
+                    <label className="grid gap-1.5 text-sm font-medium">
+                      Notes
+                      <textarea name="notes" rows={3} maxLength={10000} defaultValue={record.submission?.notes ?? ''} className={inputClass} />
+                    </label>
+                    <button disabled={busyId !== null} className="h-10 rounded-lg bg-ink px-4 text-sm font-semibold text-ink-foreground disabled:opacity-60">
+                      {busyId === record.registration_id ? 'Saving…' : record.submission ? 'Update submission' : 'Submit work'}
+                    </button>
+                  </form>
+                )}
+              </li>
+            )
+          })}
         </ul>
       )}
     </div>

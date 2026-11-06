@@ -1,3 +1,4 @@
+
 'use client'
 
 import Link from 'next/link'
@@ -198,6 +199,7 @@ export function PanelShell({
             </div>
           </div>
         </header>
+
         {signOutError && (
           <p role="alert" className="mx-4 mt-4 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive sm:mx-6">
             {signOutError}
@@ -239,6 +241,7 @@ export function PanelShell({
             </Link>
           </div>
         </div>
+
         <main className="mx-auto max-w-[1600px] px-4 py-7 sm:px-6 sm:py-9">{children}</main>
       </div>
     </div>
@@ -247,28 +250,36 @@ export function PanelShell({
 
 export function PanelAccessNotice({ admin = false }: { admin?: boolean }) {
   const configured = isSupabaseConfigured()
+
   return (
-    <div role="status" className="mb-7 flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3.5 text-sm text-amber-950">
+    <div
+      role="status"
+      className="mb-7 flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3.5 text-sm text-amber-950"
+    >
       <Shield className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
       <div>
         <p className="font-semibold">
           {admin
             ? configured
-              ? 'Supabase Auth and role-based admin access checks are enabled.'
+              ? 'Supabase credentials are configured; verify the database schema and admin access.'
               : 'Admin workspace preview — not access-controlled yet.'
             : configured
               ? 'Supabase Auth and participant profiles are enabled.'
               : 'Account services are not connected yet.'}
         </p>
+
         <p className="mt-1 leading-relaxed text-amber-900/85">
           {admin
             ? configured
-              ? 'Apply the ordered Supabase migrations to enable event, payment, participant, result, and certificate workflows. SMTP settings are required for email delivery.'
+              ? 'Confirm the database migrations are applied and administrator access works before managing platform records. Visit Platform Status to review configuration.'
               : 'Database, server-side admin authorization, and management actions must be configured before this workspace can handle real records. Do not use it with production data.'
             : configured
               ? 'Your registrations, payments, submissions, results, notifications, and eligible certificates are loaded from your account records.'
               : 'Authentication and the database are awaiting configuration. Your profile, participant ID, registrations, and activity are not being loaded or saved yet.'}{' '}
-          <Link href="/setup" className="font-semibold underline underline-offset-2">
+          <Link
+            href="/setup"
+            className="font-semibold underline underline-offset-2"
+          >
             View setup requirements
           </Link>
         </p>

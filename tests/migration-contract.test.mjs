@@ -11,6 +11,8 @@ const workflows = readMigration('202610200001_participant_workflows.sql')
 const paymentReview = readMigration('202610200002_event_registration_and_payment_review.sql')
 const authProfileRepair = readMigration('202610220001_auth_profile_status_repair.sql')
 const eventPaymentReceipts = readMigration('202610220002_event_payment_receipts.sql')
+const certificateVerification = readMigration('202611050001_certificate_verification_status.sql')
+const submissionWindows = readMigration('202611050002_competition_submission_windows.sql')
 
 function functionBody(sql, name) {
   const declaration = new RegExp(
@@ -39,6 +41,53 @@ test('migration files exist in dependency order and retain the profile/event fou
   assert.match(authProfileRepair, /max_participant_number[\s\S]*setval\(\s*'public\.participant_id_sequence'/i)
   assert.match(authProfileRepair, /profiles_account_status_check', 'profiles_account_status_allowed_check/i)
   assert.match(eventPaymentReceipts, /create table|create or replace function public\.submit_upi_payment/i)
+})
+
+test('participant workflow migration retains all RPCs and permissions', () => {
+  for (const name of [
+    'is_admin',
+    'register_for_event',
+    'submit_upi_payment',
+    'review_upi_payment',
+    'update_payment_settings',
+    'review_upi_payments',
+    'admin_search_participants',
+    'manage_participant',
+    'review_competition_submission',
+    'manage_event_winner',
+    'issue_event_certificates',
+    'revoke_certificate',
+    'verify_certificate',
+    'get_published_winners',
+    'set_notification_read',
+  ]) {
+    assert.doesNotThrow(() => functionBody(workflows, name), `Expected public.${name} to be complete`)
+  }
+  assert.match(workflows, /create index if not exists notifications_user_created_idx\s+on public\.notifications \(user_id, created_at desc\)/i)
+  assert.match(workflows, /revoke all on function public\.manage_event_winner\(uuid, uuid, integer, text, boolean\) from public, anon/i)
+  assert.match(workflows, /grant execute on function public\.set_notification_read\(uuid\) to authenticated/i)
+  assert.match(workflows, /notify pgrst, 'reload schema';\s*commit;\s*$/i)
+})
+
+test('certificate verification reports revoked records without exposing participant IDs', () => {
+  const body = functionBody(certificateVerification, 'verify_certificate')
+  assert.match(certificateVerification, /drop function if exists public\.verify_certificate\(text\)/i)
+  assert.match(body, /case when c\.revoked_at is null then 'valid' else 'revoked' end/i)
+  assert.match(body, /c\.verification_code::text = lower\(btrim\(p_certificate_number\)\)/i)
+  assert.match(body, /case when c\.revoked_at is null then c\.recipient_name else null end/i)
+  assert.doesNotMatch(body, /participant_id/i)
+  assert.match(certificateVerification, /grant execute on function public\.verify_certificate\(text\) to anon, authenticated/i)
+  assert.match(certificateVerification, /notify pgrst, 'reload schema';\s*commit;\s*$/i)
+})
+
+test('competition submissions enforce opening and late deadlines in RLS policies', () => {
+  assert.match(submissionWindows, /add column if not exists submission_opens_at timestamptz/i)
+  assert.match(submissionWindows, /add column if not exists allow_late_submissions boolean not null default false/i)
+  assert.match(submissionWindows, /events_submission_window_check[\s\S]*submission_deadline < late_submission_deadline/i)
+  assert.match(submissionWindows, /Participants can submit for confirmed competitions[\s\S]*now\(\) >= e\.submission_opens_at[\s\S]*now\(\) <= e\.submission_deadline/i)
+  assert.match(submissionWindows, /e\.allow_late_submissions[\s\S]*now\(\) <= e\.late_submission_deadline/i)
+  assert.match(submissionWindows, /Participants can update pending submissions[\s\S]*now\(\) >= e\.submission_opens_at[\s\S]*e\.allow_late_submissions[\s\S]*now\(\) <= e\.late_submission_deadline/i)
+  assert.match(submissionWindows, /notify pgrst, 'reload schema';\s*commit;\s*$/i)
 })
 
 test('auth profile repair preserves existing roles and safely provisions missing profiles', () => {

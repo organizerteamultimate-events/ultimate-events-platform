@@ -132,6 +132,8 @@ For a fresh database, apply the migrations in order:
 5. `202610200002_event_registration_and_payment_review.sql`
 6. `202610220001_auth_profile_status_repair.sql`
 7. `202610220002_event_payment_receipts.sql`
+8. `202611050001_certificate_verification_status.sql`
+9. `202611050002_competition_submission_windows.sql`
 
 The events migration now explicitly creates the legacy-compatible
 `payments.payment_status` field and nullable `payments.event_id` field needed
@@ -142,6 +144,85 @@ do not assume migration history or schema matches this sequence: inspect
 Supabase migration history and run the preflight queries before applying
 anything. These migrations have not been applied to the linked project from
 this workspace.
+
+The certificate verification migration replaces the public verification RPC
+without changing certificate records. It allows lookup by certificate number
+or verification code and distinguishes active certificates from revoked ones.
+Revoked lookups do not return the participant's name or ID. Apply it only after
+checking the existing migration history; it has not been applied to a database
+from this workspace.
+
+The competition submission window migration adds optional opening, deadline,
+and explicit late-submission cutoffs to events. Once configured, database RLS
+enforces the window for both initial link submissions and edits; changing the
+browser clock cannot bypass it. Existing events without a configured window
+cannot accept new submissions until an administrator sets one. The migration
+preserves existing submission records and has not been applied from this
+workspace. It does not add file uploads or competition-specific allowed file
+types.
+
+Before applying these two November migrations, check that the target objects
+exist and inspect the current function/policy definitions:
+
+```sql
+select to_regclass('public.certificates') as certificates_table,
+       to_regclass('public.events') as events_table,
+       to_regclass('public.submissions') as submissions_table,
+       to_regprocedure('public.verify_certificate(text)') as certificate_verifier;
+
+select table_name, column_name, data_type
+from information_schema.columns
+where table_schema = 'public'
+  and (
+    (table_name = 'events' and column_name in (
+      'submission_opens_at', 'submission_deadline',
+      'allow_late_submissions', 'late_submission_deadline'
+    ))
+    or (table_name = 'certificates' and column_name = 'verification_code')
+  )
+order by table_name, ordinal_position;
+
+select tablename, policyname, cmd
+from pg_policies
+where schemaname = 'public'
+  and tablename in ('events', 'submissions')
+order by tablename, policyname;
+```
+
+After an authorized operator applies them, verify the result without changing
+data:
+
+```sql
+select pg_get_function_result('public.verify_certificate(text)'::regprocedure);
+
+select column_name, data_type, is_nullable, column_default
+from information_schema.columns
+where table_schema = 'public'
+  and table_name = 'events'
+  and column_name in (
+    'submission_opens_at', 'submission_deadline',
+    'allow_late_submissions', 'late_submission_deadline'
+  )
+order by ordinal_position;
+
+select tablename, policyname, cmd, qual, with_check
+from pg_policies
+where schemaname = 'public'
+  and tablename = 'submissions'
+  and policyname in (
+    'Participants can submit for confirmed competitions',
+    'Participants can update pending submissions'
+  )
+order by policyname;
+```
+
+There is no automatic rollback for these migrations. To revert verification
+behavior, restore the previous `verify_certificate(text)` definition from the
+prior migration after reviewing its public data exposure. To revert submission
+window enforcement, restore the prior participant submission policies. Keep
+the new event columns and their configured values unless an operator has
+confirmed that dropping them cannot discard settings; do not run destructive
+rollback SQL blindly.
 
 Read-only preflight (run before the migration). First verify which tables
 actually exist and inspect every existing column/type:

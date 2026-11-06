@@ -150,7 +150,10 @@ export default async function DashboardSectionPage({
     const eventIds = [...new Set((registrations ?? []).map((registration) => registration.event_id))]
     const [{ data: events, error: eventsError }] = eventIds.length
       ? await Promise.all([
-          supabase.from('events').select('id, title, category').in('id', eventIds),
+          supabase
+            .from('events')
+            .select('id, title, category, submission_opens_at, submission_deadline, allow_late_submissions, late_submission_deadline')
+            .in('id', eventIds),
         ])
       : [{ data: [], error: null }]
     const submissionByRegistration = new Map((submissions ?? []).map((submission) => [submission.registration_id, submission]))
@@ -164,6 +167,10 @@ export default async function DashboardSectionPage({
           registration_id: registration.id,
           event_id: event.id,
           event_title: event.title,
+          submission_opens_at: event.submission_opens_at,
+          submission_deadline: event.submission_deadline,
+          allow_late_submissions: event.allow_late_submissions,
+          late_submission_deadline: event.late_submission_deadline,
           submission: submission ? {
             id: submission.id,
             submission_url: submission.submission_url,

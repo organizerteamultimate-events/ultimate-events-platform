@@ -26,6 +26,39 @@ function isValidSchedule(opensAt: string, deadline: string, eventDate: string) {
     && (closes === null || event === null || closes <= event)
 }
 
+function getSubmissionWindow(formData: FormData) {
+  const opensAt = String(formData.get('submission_opens_at') ?? '')
+  const deadline = String(formData.get('submission_deadline') ?? '')
+  const allowLate = formData.get('allow_late_submissions') === 'on'
+  const lateDeadline = String(formData.get('late_submission_deadline') ?? '')
+  const hasWindow = Boolean(opensAt || deadline || lateDeadline || allowLate)
+  const opens = opensAt ? new Date(opensAt).getTime() : null
+  const closes = deadline ? new Date(deadline).getTime() : null
+  const lateCloses = lateDeadline ? new Date(lateDeadline).getTime() : null
+  const toIso = (value: string, timestamp: number | null) =>
+    value && timestamp !== null && Number.isFinite(timestamp)
+      ? new Date(timestamp).toISOString()
+      : null
+  const valid = !hasWindow || (
+    opens !== null &&
+    closes !== null &&
+    Number.isFinite(opens) &&
+    Number.isFinite(closes) &&
+    opens <= closes &&
+    (allowLate
+      ? lateCloses !== null && Number.isFinite(lateCloses) && closes < lateCloses
+      : lateCloses === null)
+  )
+
+  return {
+    valid,
+    submission_opens_at: toIso(opensAt, opens),
+    submission_deadline: toIso(deadline, closes),
+    allow_late_submissions: allowLate,
+    late_submission_deadline: toIso(lateDeadline, lateCloses),
+  }
+}
+
 export function AdminEventManager({
   events,
   loadError,
@@ -54,6 +87,7 @@ export function AdminEventManager({
     const eventDateValue = String(formData.get('event_date') ?? '')
     const opensAtValue = String(formData.get('registration_opens_at') ?? '')
     const deadlineValue = String(formData.get('registration_deadline') ?? '')
+    const submissionWindow = getSubmissionWindow(formData)
     const { data: authData, error: authError } = await supabase.auth.getUser()
 
     if (authError || !authData.user) {
@@ -69,6 +103,10 @@ export function AdminEventManager({
       setMessage('Registration opening and deadline must be at or before the event date, and opening must be at or before the deadline.')
       return
     }
+    if (!submissionWindow.valid) {
+      setMessage('Set both submission opening and deadline. Late submissions require a later late-submission deadline.')
+      return
+    }
 
     setPending(true)
     try {
@@ -81,6 +119,10 @@ export function AdminEventManager({
         event_date: eventDateValue ? new Date(eventDateValue).toISOString() : null,
         registration_opens_at: opensAtValue ? new Date(opensAtValue).toISOString() : null,
         registration_deadline: deadlineValue ? new Date(deadlineValue).toISOString() : null,
+        submission_opens_at: submissionWindow.submission_opens_at,
+        submission_deadline: submissionWindow.submission_deadline,
+        allow_late_submissions: submissionWindow.allow_late_submissions,
+        late_submission_deadline: submissionWindow.late_submission_deadline,
         status: 'draft',
         created_by: authData.user.id,
       })
@@ -114,6 +156,7 @@ export function AdminEventManager({
     const eventDateValue = String(formData.get('event_date') ?? '')
     const opensAtValue = String(formData.get('registration_opens_at') ?? '')
     const deadlineValue = String(formData.get('registration_deadline') ?? '')
+    const submissionWindow = getSubmissionWindow(formData)
     if (!id || title.length < 3 || !category || !Number.isFinite(price) || price < 0 ||
         (capacity !== null && (!Number.isInteger(capacity) || capacity < 1))) {
       setMessage('Enter a valid title, category, non-negative fee, and positive whole-number capacity.')
@@ -121,6 +164,10 @@ export function AdminEventManager({
     }
     if (!isValidSchedule(opensAtValue, deadlineValue, eventDateValue)) {
       setMessage('Registration opening and deadline must be at or before the event date, and opening must be at or before the deadline.')
+      return
+    }
+    if (!submissionWindow.valid) {
+      setMessage('Set both submission opening and deadline. Late submissions require a later late-submission deadline.')
       return
     }
 
@@ -135,6 +182,10 @@ export function AdminEventManager({
         event_date: eventDateValue ? new Date(eventDateValue).toISOString() : null,
         registration_opens_at: opensAtValue ? new Date(opensAtValue).toISOString() : null,
         registration_deadline: deadlineValue ? new Date(deadlineValue).toISOString() : null,
+        submission_opens_at: submissionWindow.submission_opens_at,
+        submission_deadline: submissionWindow.submission_deadline,
+        allow_late_submissions: submissionWindow.allow_late_submissions,
+        late_submission_deadline: submissionWindow.late_submission_deadline,
       }).eq('id', id)
       if (error) {
         setMessage(`Event was not updated: ${error.message}`)
@@ -207,6 +258,22 @@ export function AdminEventManager({
             <input name="registration_deadline" type="datetime-local" className={inputClass} />
           </label>
           <label className="flex flex-col gap-1.5 text-sm font-medium">
+            Submission opens
+            <input name="submission_opens_at" type="datetime-local" className={inputClass} />
+          </label>
+          <label className="flex flex-col gap-1.5 text-sm font-medium">
+            Submission deadline
+            <input name="submission_deadline" type="datetime-local" className={inputClass} />
+          </label>
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <input name="allow_late_submissions" type="checkbox" className="size-4 accent-gold" />
+            Allow late submissions
+          </label>
+          <label className="flex flex-col gap-1.5 text-sm font-medium">
+            Late-submission deadline
+            <input name="late_submission_deadline" type="datetime-local" className={inputClass} />
+          </label>
+          <label className="flex flex-col gap-1.5 text-sm font-medium">
             Fee in INR
             <input name="price" type="number" min="0" step="0.01" defaultValue="0" className={inputClass} required />
           </label>
@@ -264,6 +331,22 @@ export function AdminEventManager({
                         <label className="flex flex-col gap-1 text-sm font-medium">
                           Registration deadline
                           <input name="registration_deadline" type="datetime-local" className={inputClass} defaultValue={formatDateTimeLocal(event.registration_deadline)} />
+                        </label>
+                        <label className="flex flex-col gap-1 text-sm font-medium">
+                          Submission opens
+                          <input name="submission_opens_at" type="datetime-local" className={inputClass} defaultValue={formatDateTimeLocal(event.submission_opens_at)} />
+                        </label>
+                        <label className="flex flex-col gap-1 text-sm font-medium">
+                          Submission deadline
+                          <input name="submission_deadline" type="datetime-local" className={inputClass} defaultValue={formatDateTimeLocal(event.submission_deadline)} />
+                        </label>
+                        <label className="flex items-center gap-2 text-sm font-medium">
+                          <input name="allow_late_submissions" type="checkbox" className="size-4 accent-gold" defaultChecked={event.allow_late_submissions} />
+                          Allow late submissions
+                        </label>
+                        <label className="flex flex-col gap-1 text-sm font-medium">
+                          Late-submission deadline
+                          <input name="late_submission_deadline" type="datetime-local" className={inputClass} defaultValue={formatDateTimeLocal(event.late_submission_deadline)} />
                         </label>
                         <label className="flex flex-col gap-1 text-sm font-medium">
                           Fee in INR

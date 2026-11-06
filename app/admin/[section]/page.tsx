@@ -176,7 +176,7 @@ export default async function AdminSectionPage({
     const { data, error } = supabase
       ? await supabase
           .from('events')
-          .select('id, title, category, description, event_date, registration_opens_at, registration_deadline, capacity, price, status, created_at')
+          .select('id, title, category, description, event_date, registration_opens_at, registration_deadline, submission_opens_at, submission_deadline, allow_late_submissions, late_submission_deadline, capacity, price, status, created_at')
           .order('created_at', { ascending: false })
       : { data: null, error: new Error('Supabase is not configured.') }
 

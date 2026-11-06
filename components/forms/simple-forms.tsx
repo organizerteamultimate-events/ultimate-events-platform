@@ -114,8 +114,8 @@ export function CertificateVerifyForm({ initialCertificateNumber = '' }: { initi
   const [error, setError] = useState<string>()
   const [result, setResult] = useState<string | null>(null)
   const [verified, setVerified] = useState<{
+    certificate_status: 'valid' | 'revoked'
     participant_name: string
-    participant_id: string
     event_name: string
     certificate_number: string
     issued_at: string
@@ -123,8 +123,9 @@ export function CertificateVerifyForm({ initialCertificateNumber = '' }: { initi
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!/^[A-Z0-9-]{6,40}$/i.test(id.trim())) {
-      setError('Enter a valid certificate ID, e.g. UE-CERT-2026-000001.')
+    const identifier = id.trim()
+    if (!/^(?:[A-Z0-9-]{6,40}|[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i.test(identifier)) {
+      setError('Enter a certificate number or a valid verification code.')
       setResult(null)
       setVerified(null)
       return
@@ -139,7 +140,7 @@ export function CertificateVerifyForm({ initialCertificateNumber = '' }: { initi
     }
     try {
       const { data, error: verificationError } = await supabase.rpc('verify_certificate', {
-        p_certificate_number: id.trim().toUpperCase(),
+        p_certificate_number: identifier,
       })
       if (verificationError) {
         setResult(`Certificate could not be verified: ${verificationError.message}`)
@@ -147,11 +148,13 @@ export function CertificateVerifyForm({ initialCertificateNumber = '' }: { initi
       }
       const certificate = data?.[0]
       if (!certificate) {
-        setResult(`No active certificate was found for "${id.trim().toUpperCase()}".`)
+        setResult('No certificate was found for that number or verification code.')
         return
       }
       setVerified(certificate)
-      setResult('This is an active certificate issued by ULTIMATE EVENTS.')
+      setResult(certificate.certificate_status === 'valid'
+        ? 'This is a valid certificate issued by ULTIMATE EVENTS.'
+        : 'This certificate has been revoked.')
     } catch (verificationError) {
       setResult(`Certificate could not be verified: ${verificationError instanceof Error ? verificationError.message : 'Unexpected connection error.'}`)
     }
@@ -159,11 +162,11 @@ export function CertificateVerifyForm({ initialCertificateNumber = '' }: { initi
 
   return (
     <form onSubmit={onSubmit} noValidate className="flex flex-col gap-5">
-      <Field id="certificate-id" label="Certificate ID" error={error}>
+      <Field id="certificate-id" label="Certificate number or verification code" error={error}>
         <input
           id="certificate-id"
           className={`${inputClass} font-mono uppercase`}
-          placeholder="UE-CERT-2026-000001"
+          placeholder="UE-CERT-2026-000001 or verification code"
           value={id}
           onChange={(e) => setId(e.target.value)}
           aria-invalid={error ? true : undefined}
@@ -173,8 +176,10 @@ export function CertificateVerifyForm({ initialCertificateNumber = '' }: { initi
       <FormResult message={result} />
       {verified && (
         <dl className="grid gap-2 rounded-xl border bg-accent/40 p-4 text-sm">
-          <div><dt className="inline font-semibold">Participant: </dt><dd className="inline">{verified.participant_name}</dd></div>
-          <div><dt className="inline font-semibold">Participant ID: </dt><dd className="inline font-mono">{verified.participant_id}</dd></div>
+          <div><dt className="inline font-semibold">Status: </dt><dd className="inline capitalize">{verified.certificate_status}</dd></div>
+          {verified.certificate_status === 'valid' && (
+            <div><dt className="inline font-semibold">Participant: </dt><dd className="inline">{verified.participant_name}</dd></div>
+          )}
           <div><dt className="inline font-semibold">Event: </dt><dd className="inline">{verified.event_name}</dd></div>
           <div><dt className="inline font-semibold">Certificate number: </dt><dd className="inline font-mono">{verified.certificate_number}</dd></div>
           <div><dt className="inline font-semibold">Issued: </dt><dd className="inline">{new Intl.DateTimeFormat('en-IN', { dateStyle: 'long' }).format(new Date(verified.issued_at))}</dd></div>

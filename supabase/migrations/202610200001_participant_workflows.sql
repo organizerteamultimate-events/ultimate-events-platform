@@ -192,6 +192,7 @@ create table if not exists public.notifications (
 
 create index if not exists notifications_user_created_idx
   on public.notifications (user_id, created_at desc);
+
 alter table public.notifications enable row level security;
 revoke all on public.notifications from public, anon, authenticated;
 grant select on public.notifications to authenticated;
@@ -762,11 +763,11 @@ begin
     returning certificates.id, certificates.user_id, certificates.recipient_name,
               certificates.event_name, certificates.certificate_number, certificates.verification_code
   ), notices as (
-  insert into public.notifications (user_id, kind, title, message)
-  select user_id, 'certificate', 'Your certificate is ready',
-         'A certificate for ' || event_name || ' is available in your participant dashboard. Certificate number: ' || certificate_number
-  from created
-  returning id
+    insert into public.notifications (user_id, kind, title, message)
+    select user_id, 'certificate', 'Your certificate is ready',
+           'A certificate for ' || event_name || ' is available in your participant dashboard. Certificate number: ' || certificate_number
+    from created
+    returning id
   )
   select created.id, created.user_id, created.recipient_name, created.event_name,
          created.certificate_number, created.verification_code

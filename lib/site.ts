@@ -1,3 +1,4 @@
+
 export const site = {
   name: 'ULTIMATE EVENTS',
   tagline: 'Explore Skills. Compete. Achieve. Grow Worldwide.',
@@ -32,27 +33,37 @@ export type SetupItem = {
 export const setupChecklist: SetupItem[] = [
   {
     name: 'Supabase project',
-    purpose: 'Provides managed PostgreSQL storage and secure authentication for accounts, profiles, and participant IDs.',
-    requires: 'NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY in .env.local, then apply the profile migration.',
+    purpose:
+      'Provides managed PostgreSQL storage and secure authentication for accounts, profiles, and participant IDs.',
+    requires:
+      'Supabase URL and publishable key must be configured. Existing database schema and migrations should be verified; do not reapply completed migrations.',
   },
   {
     name: 'Email provider',
-    purpose: 'Email verification, password reset, confirmations, reminders, and announcements.',
-    requires: 'Supabase Auth SMTP settings and server-side SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_APP_PASSWORD, and EMAIL_FROM.',
+    purpose:
+      'Supports email verification, password reset, confirmations, reminders, and announcements.',
+    requires:
+      'Configure Supabase Auth SMTP settings and server-side SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_APP_PASSWORD, and EMAIL_FROM. Credentials alone do not confirm successful email delivery.',
   },
   {
     name: 'Manual UPI payments',
-    purpose: 'UPI transaction references remain pending until an administrator verifies the transfer.',
-    requires: 'Apply the participant workflows migration, then set the organization UPI ID and instructions in Admin → Settings; no payment gateway is connected.',
+    purpose:
+      'Participants submit their UPI transaction reference and payment receipt. Payments remain pending until an administrator verifies them.',
+    requires:
+      'Configure the organization UPI ID and payment instructions in Admin → Settings. No external payment gateway is connected.',
   },
   {
     name: 'Code judging service',
-    purpose: 'Sandboxed execution and scoring of competition submissions off the main server.',
-    requires: 'An external judging service endpoint and API credentials.',
+    purpose:
+      'Supports sandboxed execution and scoring of competition submissions outside the main application server.',
+    requires:
+      'Optional integration: configure an external judging service endpoint and API credentials before enabling automated code judging.',
   },
   {
-    name: 'Admin bootstrap',
-    purpose: 'Grants the first administrator through a secure, documented process.',
-    requires: 'Create and verify an account, then promote its auth user UUID to admin using the owner-only SQL in SUPABASE_SETUP.md.',
+    name: 'Admin access',
+    purpose:
+      'Allows authorized administrators to manage events, registrations, payment reviews, participants, and platform settings.',
+    requires:
+      'Verify that the existing administrator account has the admin role and can access the Admin Dashboard. Do not create another admin or repeat the bootstrap process.',
   },
 ]

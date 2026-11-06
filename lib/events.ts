@@ -8,6 +8,10 @@ export type EventRecord = {
   event_date: string | null
   registration_opens_at: string | null
   registration_deadline: string | null
+  submission_opens_at: string | null
+  submission_deadline: string | null
+  allow_late_submissions: boolean
+  late_submission_deadline: string | null
   capacity: number | null
   price: number
   status: 'draft' | 'published' | 'cancelled' | 'completed'
@@ -20,7 +24,7 @@ export async function getPublishedEvents() {
 
   const { data, error } = await supabase
     .from('events')
-    .select('id, title, category, description, event_date, registration_opens_at, registration_deadline, capacity, price, status, created_at')
+    .select('id, title, category, description, event_date, registration_opens_at, registration_deadline, submission_opens_at, submission_deadline, allow_late_submissions, late_submission_deadline, capacity, price, status, created_at')
     .eq('status', 'published')
     .order('event_date', { ascending: true, nullsFirst: false })
 
